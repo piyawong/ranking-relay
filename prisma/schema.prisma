@@ -1,0 +1,50 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Block {
+  id           String         @id @default(uuid())
+  block_number Int           @unique
+  created_at   DateTime      @default(now())
+  updated_at   DateTime      @updatedAt
+  relay_details RelayDetail[]
+
+  @@index([block_number])
+}
+
+model RelayDetail {
+  id            String   @id @default(uuid())
+  block_id      String
+  block         Block    @relation(fields: [block_id], references: [id], onDelete: Cascade)
+  relay_name    String
+  latency       Decimal  @db.Decimal(10, 2)
+  loss          Decimal  @db.Decimal(5, 2)
+  arrival_order Int
+  ranking_score Decimal  @db.Decimal(10, 2)
+  created_at    DateTime @default(now())
+
+  @@index([block_id])
+  @@index([relay_name])
+  @@index([ranking_score])
+}
+
+model RelayStatistics {
+  id                  String   @id @default(uuid())
+  relay_name          String   @unique
+  total_blocks        Int      @default(0)
+  avg_latency         Decimal  @db.Decimal(10, 2)
+  avg_loss            Decimal  @db.Decimal(5, 2)
+  first_arrival_count Int      @default(0)
+  last_updated        DateTime @updatedAt
+
+  @@index([relay_name])
+}
