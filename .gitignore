@@ -1,3 +1,71 @@
+# Dependencies
 node_modules
-# Keep environment variables out of version control
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Next.js build output
+.next/
+out/
+build/
+dist/
+
+# Production
+/build
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+logs
+*.log
+
+# Testing
+coverage
+.nyc_output
+
+# Cache
+.cache
+.parcel-cache
+.eslintcache
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# Docker
+docker-compose.override.yml
+
+# Prisma
+prisma/dev.db
+prisma/dev.db-journal
+
+# Python (if any)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+venv_linux/
+ENV/
+env/
