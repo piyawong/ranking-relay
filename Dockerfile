@@ -27,6 +27,7 @@ COPY tsconfig.json ./
 COPY tailwind.config.ts ./
 COPY postcss.config.js ./
 COPY socket-server.js ./
+COPY server.js ./
 COPY app ./app
 COPY components ./components
 COPY lib ./lib
@@ -62,11 +63,18 @@ COPY --from=builder /app/prisma ./prisma
 # Copy Prisma client binaries
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-# Copy socket server
+# Copy socket server and main server
 COPY --from=builder /app/socket-server.js ./socket-server.js
-# Copy lib directory for socket server dependencies
+COPY --from=builder /app/server.js ./server.js
+# Copy lib directory for socket server and price service dependencies
+COPY --from=builder /app/lib/services/*.js ./lib/services/
+COPY --from=builder /app/lib/utils/*.js ./lib/utils/
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/node_modules ./node_modules
+
+# Fix permissions for service files
+RUN chown -R nextjs:nodejs /app/lib/services /app/lib/utils
+RUN chmod -R 755 /app/lib/services /app/lib/utils
 
 USER nextjs
 

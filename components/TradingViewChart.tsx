@@ -1,14 +1,25 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, SeriesMarker, Time } from 'lightweight-charts';
 
 type ChartType = 'Line' | 'Area' | 'Baseline';
 type ScaleMode = 'auto' | 'percentage';
 
+// Trade marker interface
+export interface TradeMarker {
+  time: number; // Unix timestamp in seconds
+  position: 'aboveBar' | 'belowBar' | 'inBar';
+  color: string;
+  shape: 'circle' | 'square' | 'arrowUp' | 'arrowDown';
+  text?: string;
+  size?: number;
+}
+
 interface TradingViewChartProps {
   data: { time: number; value: number }[];
   secondaryData?: { time: number; value: number }[]; // Optional RLB price data
+  markers?: TradeMarker[]; // Trade markers to display on chart
   color?: string;
   secondaryColor?: string;
   height?: number;
@@ -16,18 +27,21 @@ interface TradingViewChartProps {
   secondaryFormatter?: (value: number) => string;
   onTypeChange?: (type: ChartType) => void;
   showSecondary?: boolean; // Toggle for secondary series
+  showMarkers?: boolean; // Toggle for trade markers
 }
 
 export default function TradingViewChart({
   data,
   secondaryData,
+  markers,
   color = '#2962FF',
   secondaryColor = '#FF6B35',
   height = 400,
   valueFormatter = (value: number) => `$${value.toFixed(2)}`,
-  secondaryFormatter: _secondaryFormatter = (value: number) => `$${value.toFixed(6)}`,
+  secondaryFormatter: _secondaryFormatter = (value: number) => `${value.toFixed(3)}¢`,
   onTypeChange,
-  showSecondary = true
+  showSecondary = true,
+  showMarkers = true
 }: TradingViewChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -36,6 +50,7 @@ export default function TradingViewChart({
   const [chartType, setChartType] = useState<ChartType>('Area');
   const [scaleMode, setScaleMode] = useState<ScaleMode>('percentage');
   const [rlbPriceVisible, setRlbPriceVisible] = useState(true);
+  const [markersVisible, setMarkersVisible] = useState(true);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   // Create chart only once on mount
@@ -298,6 +313,34 @@ export default function TradingViewChart({
     chartRef.current.applyOptions({ height });
   }, [height]);
 
+  // Update markers on the series
+  useEffect(() => {
+    if (!seriesRef.current) return;
+
+    if (markers && markers.length > 0 && markersVisible && showMarkers) {
+      // Convert markers to lightweight-charts format
+      const chartMarkers: SeriesMarker<Time>[] = markers
+        .filter(m => typeof m.time === 'number' && !isNaN(m.time))
+        .map(m => ({
+          time: m.time as Time,
+          position: m.position,
+          color: m.color,
+          shape: m.shape,
+          text: m.text || '',
+          size: m.size || 1,
+        }))
+        .sort((a, b) => (a.time as number) - (b.time as number));
+
+      if (chartMarkers.length > 0) {
+        seriesRef.current.setMarkers(chartMarkers);
+        console.log(`[Chart] Set ${chartMarkers.length} trade markers`);
+      }
+    } else {
+      // Clear markers
+      seriesRef.current.setMarkers([]);
+    }
+  }, [markers, markersVisible, showMarkers]);
+
   // Create/update secondary series (RLB Price)
   useEffect(() => {
     if (!chartRef.current || !secondaryData || !showSecondary) {
@@ -315,28 +358,27 @@ export default function TradingViewChart({
         color: secondaryColor,
         lineWidth: 2,
         priceScaleId: 'right',
-        title: 'RLB Price',
+        title: 'RLB (¢)',
+        // Set price format for cents (3 decimal places)
+        priceFormat: {
+          type: 'price',
+          precision: 3,
+          minMove: 0.001,
+        },
+        lastValueVisible: true,
+        priceLineVisible: true,
       });
       secondarySeriesRef.current = secondarySeries;
 
-      // Configure right price scale for 6 decimal precision
+      // Configure right price scale for 5 decimal precision
+      // Use custom formatter to force 5 decimal display on Y-axis ticks
       chartRef.current.priceScale('right').applyOptions({
         scaleMargins: {
           top: 0.1,
           bottom: 0.1,
         },
         borderColor: '#FF6B35',
-        // Force precision mode to ensure 6 decimals are shown
-        mode: 0, // Normal price scale mode
-      });
-
-      // Apply custom formatter to secondary series for 6 decimals
-      secondarySeries.applyOptions({
-        priceFormat: {
-          type: 'price',
-          precision: 6,
-          minMove: 0.000001,
-        },
+        autoScale: true,
       });
     }
 
@@ -344,7 +386,15 @@ export default function TradingViewChart({
     const cleanedSecondaryData = cleanData(secondaryData);
     if (cleanedSecondaryData.length > 0 && rlbPriceVisible) {
       secondarySeriesRef.current.setData(cleanedSecondaryData);
-      secondarySeriesRef.current.applyOptions({ visible: true });
+      // Reapply the price format when making visible (cents with 3 decimals)
+      secondarySeriesRef.current.applyOptions({
+        visible: true,
+        priceFormat: {
+          type: 'price',
+          precision: 3,
+          minMove: 0.001,
+        },
+      });
     } else {
       secondarySeriesRef.current.applyOptions({ visible: false });
     }
@@ -372,63 +422,8 @@ export default function TradingViewChart({
   return (
     <div className="w-full space-y-2">
       {/* Chart Type Selector */}
-      <div className="flex gap-2 items-center justify-between flex-wrap">
-        <div className="flex gap-4 items-center">
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-muted-foreground">Type:</span>
-            <div className="flex gap-1">
-              {(['Line', 'Area', 'Baseline'] as ChartType[]).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => handleTypeChange(type)}
-                  className={`px-3 py-1 text-xs rounded transition-colors ${
-                    chartType === type
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted hover:bg-muted/80 text-muted-foreground'
-                  }`}
-                >
-                  {type}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-muted-foreground">Scale:</span>
-            <div className="flex gap-1">
-              {(['auto', 'percentage'] as ScaleMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => setScaleMode(mode)}
-                  className={`px-3 py-1 text-xs rounded transition-colors ${
-                    scaleMode === mode
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted hover:bg-muted/80 text-muted-foreground'
-                  }`}
-                >
-                  {mode === 'auto' ? 'Auto' : '% View'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* RLB Price Toggle */}
-          {secondaryData && showSecondary && (
-            <div className="flex gap-2 items-center">
-              <button
-                onClick={() => setRlbPriceVisible(!rlbPriceVisible)}
-                className={`px-3 py-1 text-xs rounded transition-colors flex items-center gap-1 ${
-                  rlbPriceVisible
-                    ? 'bg-orange-500 text-white'
-                    : 'bg-muted hover:bg-muted/80 text-muted-foreground'
-                }`}
-              >
-                <span style={{ color: rlbPriceVisible ? 'white' : secondaryColor }}>●</span>
-                RLB Price
-              </button>
-            </div>
-          )}
-        </div>
+      <div className="flex gap-2 items-center justify-between  ">
+     
 
         {/* Data Statistics */}
         {dataStats && (

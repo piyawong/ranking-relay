@@ -90,8 +90,11 @@ export async function createBlock(
     // Calculate absolute time difference
     timeDifferenceMs = Math.abs(firstRelayTime - bloxrouteTime);
 
-    // Determine winner (bloxroute wins if it arrives first)
-    isWinBloxroute = bloxrouteTime < firstRelayTime;
+    // Determine winner with 5ms tolerance for relay
+    // Reason: Relay wins if it arrives first OR within 5ms of bloxroute
+    // This accounts for network variance and gives relay a fair margin
+    const RELAY_WIN_TOLERANCE_MS = 5;
+    isWinBloxroute = (bloxrouteTime + RELAY_WIN_TOLERANCE_MS) < firstRelayTime;
   }
 
   return prisma.block.create({

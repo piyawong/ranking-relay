@@ -4,6 +4,9 @@ import { BalanceSnapshotSchema } from '@/lib/utils/balance-validation';
 import { prisma } from '@/lib/db/prisma';
 import { decimalToNumber } from '@/lib/utils/format';
 import type { ApiResponse } from '@/lib/types/api';
+// Use .js version to share cache with server.js price-refresh-service
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { fetchRLBPrice } = require('@/lib/utils/rlb-price-service.js');
 
 // POST /api/balance/snapshot - Save a balance snapshot
 export async function POST(request: NextRequest) {
@@ -14,23 +17,11 @@ export async function POST(request: NextRequest) {
         // Parse timestamp or use current time
         const timestamp = validated.ts ? new Date(validated.ts) : new Date();
 
-        // Fetch current RLB price
-        let rlbPrice: number | null = null;
-        try {
-            const origin = request.nextUrl.origin || 'http://localhost:3000';
-            const priceResponse = await fetch(`${origin}/api/balance/price`, {
-                cache: 'no-store'
-            });
-            if (priceResponse.ok) {
-                const priceData = await priceResponse.json();
-                rlbPrice = priceData.data?.price_usd || null;
-            }
-        } catch (error) {
-            console.error('Failed to fetch RLB price for snapshot:', error);
-            // Continue without price - field is optional
-        }
+        // Fetch current RLB price (uses 55-second cache to respect rate limits)
+        // This ensures each snapshot gets a reasonably current price
+        const rlbPrice = await fetchRLBPrice();
 
-        // Create balance snapshot
+        // Create balance snapshot with current price
         const snapshot = await prisma.balanceSnapshot.create({
             data: {
                 timestamp,
@@ -39,7 +30,7 @@ export async function POST(request: NextRequest) {
                 onchain_usdt: validated.onchain.usdt,
                 onsite_rlb: validated.onsite.rlb,
                 onsite_usd: validated.onsite.usd,
-                rlb_price_usd: rlbPrice,
+                rlb_price_usd: rlbPrice,  // Attach current price immediately
             }
         });
 

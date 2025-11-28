@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import TradingViewChart from '@/components/TradingViewChart';
+import TradingViewChart, { TradeMarker } from '@/components/TradingViewChart';
 import {
   RefreshCw,
   DollarSign,
@@ -20,7 +20,10 @@ import {
   Wrench,
   ChevronDown,
   ChevronUp,
-  AlertTriangle
+  AlertTriangle,
+  Swords,
+  Trophy,
+  Target
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useWebSocket } from '@/lib/hooks/useWebSocket';
@@ -62,11 +65,22 @@ async function flushAllData() {
 }
 
 // Fetch balance snapshots with high diff
-async function fetchHighDiffSnapshots() {
-  const response = await fetch('/api/balance/high-diff');
+async function fetchHighDiffSnapshots(limit: number = 50, fastMode: boolean = true) {
+  const response = await fetch(`/api/balance/high-diff?limit=${limit}&fast=${fastMode}`);
   if (!response.ok) throw new Error('Failed to fetch high diff snapshots');
   const data = await response.json();
   return data.data;
+}
+
+// Batch delete high diff snapshots
+async function batchDeleteSnapshots(snapshotIds: string[]) {
+  const response = await fetch('/api/balance/high-diff/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snapshotIds })
+  });
+  if (!response.ok) throw new Error('Failed to batch delete snapshots');
+  return response.json();
 }
 
 // Fetch all spikes for manual review
@@ -75,6 +89,14 @@ async function fetchAllSpikes() {
   if (!response.ok) throw new Error('Failed to fetch spikes');
   const data = await response.json();
   return data.data;
+}
+
+// Fetch trades for chart markers and P/L analytics
+async function fetchTrades() {
+  const response = await fetch('/api/trades');
+  if (!response.ok) throw new Error('Failed to fetch trades');
+  const data = await response.json();
+  return { trades: data.trades || [], statistics: data.statistics || null };
 }
 
 // Format number helper
@@ -145,6 +167,379 @@ export default function DashboardPage() {
     queryFn: fetchAllSpikes,
     enabled: showSpikes, // Only fetch when expanded
   });
+
+  // Fetch trades for chart markers and P/L analytics
+  const { data: tradesData } = useQuery({
+    queryKey: ['trades-for-chart'],
+    queryFn: fetchTrades,
+    refetchInterval: 30000, // Refresh trades every 30 seconds
+  });
+
+  // Extract trades and statistics
+  const allTrades = tradesData?.trades || [];
+  const tradeStatistics = tradesData?.statistics || null;
+
+  // Filter trades by selected time range
+  const trades = useMemo(() => {
+    if (!allTrades || allTrades.length === 0) return [];
+
+    // If custom days is set and valid, use that
+    const parsedCustomDays = parseInt(customDays, 10);
+    if (customDays && !isNaN(parsedCustomDays) && parsedCustomDays > 0) {
+      const cutoffTime = new Date();
+      cutoffTime.setDate(cutoffTime.getDate() - parsedCustomDays);
+      return allTrades.filter((t: any) => new Date(t.timestamp) >= cutoffTime);
+    }
+
+    if (timeRange === 'all') return allTrades;
+
+    const now = new Date();
+    const cutoffTime = new Date();
+
+    switch (timeRange) {
+      case '1h':
+        cutoffTime.setHours(now.getHours() - 1);
+        break;
+      case '6h':
+        cutoffTime.setHours(now.getHours() - 6);
+        break;
+      case '24h':
+        cutoffTime.setHours(now.getHours() - 24);
+        break;
+      case '7d':
+        cutoffTime.setDate(now.getDate() - 7);
+        break;
+      case '30d':
+        cutoffTime.setDate(now.getDate() - 30);
+        break;
+      default:
+        return allTrades;
+    }
+
+    return allTrades.filter((t: any) => new Date(t.timestamp) >= cutoffTime);
+  }, [allTrades, timeRange, customDays]);
+
+  // Calculate cumulative P/L chart data from trades (using actual USD profit)
+  // Returns both raw profit (without gas) and profit with gas
+  // Includes regular time intervals for proper chart display
+  const { tradePnLChartData, tradePnLRawChartData } = useMemo(() => {
+    // Determine the time range for the chart
+    const now = new Date();
+    let startTime = new Date();
+    let intervalMs = 60000; // Default: 1 minute
+
+    const parsedCustomDays = parseInt(customDays, 10);
+    if (customDays && !isNaN(parsedCustomDays) && parsedCustomDays > 0) {
+      startTime.setDate(now.getDate() - parsedCustomDays);
+      if (parsedCustomDays <= 1) intervalMs = 60000; // 1 minute
+      else if (parsedCustomDays <= 7) intervalMs = 300000; // 5 minutes
+      else intervalMs = 900000; // 15 minutes
+    } else {
+      switch (timeRange) {
+        case '1h':
+          startTime.setHours(now.getHours() - 1);
+          intervalMs = 60000; // 1 minute
+          break;
+        case '6h':
+          startTime.setHours(now.getHours() - 6);
+          intervalMs = 60000; // 1 minute
+          break;
+        case '24h':
+          startTime.setHours(now.getHours() - 24);
+          intervalMs = 120000; // 2 minutes
+          break;
+        case '7d':
+          startTime.setDate(now.getDate() - 7);
+          intervalMs = 300000; // 5 minutes
+          break;
+        case '30d':
+          startTime.setDate(now.getDate() - 30);
+          intervalMs = 900000; // 15 minutes
+          break;
+        case 'all':
+          // For 'all', use first trade time or 24h ago
+          if (trades && trades.length > 0) {
+            const sortedTrades = [...trades].sort(
+              (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+            startTime = new Date(sortedTrades[0].timestamp);
+            const spanMs = now.getTime() - startTime.getTime();
+            const spanDays = spanMs / (1000 * 60 * 60 * 24);
+            if (spanDays <= 1) intervalMs = 60000;
+            else if (spanDays <= 7) intervalMs = 300000;
+            else intervalMs = 900000;
+          } else {
+            startTime.setHours(now.getHours() - 24);
+            intervalMs = 120000;
+          }
+          break;
+      }
+    }
+
+    // Generate time intervals
+    const startMs = startTime.getTime();
+    const endMs = now.getTime();
+
+    // Sort trades by timestamp
+    const sortedTrades = trades && trades.length > 0
+      ? [...trades].sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+      : [];
+
+    // Build cumulative values at each trade
+    const tradeEvents: { time: number; netProfit: number; rawProfit: number }[] = [];
+    let cumulativeNet = 0;
+    let cumulativeRaw = 0;
+
+    sortedTrades.forEach((trade: any) => {
+      const tradeTime = new Date(trade.timestamp).getTime();
+      if (trade.profit_with_gas_usd !== null) {
+        cumulativeNet += trade.profit_with_gas_usd;
+      }
+      if (trade.raw_profit_usd !== null) {
+        cumulativeRaw += trade.raw_profit_usd;
+      }
+      tradeEvents.push({ time: tradeTime, netProfit: cumulativeNet, rawProfit: cumulativeRaw });
+    });
+
+    // Generate chart data with regular intervals
+    const withGasData: { time: number; value: number }[] = [];
+    const rawData: { time: number; value: number }[] = [];
+
+    let currentNet = 0;
+    let currentRaw = 0;
+    let tradeIndex = 0;
+
+    for (let t = startMs; t <= endMs; t += intervalMs) {
+      // Apply all trades that happened before or at this time
+      while (tradeIndex < tradeEvents.length && tradeEvents[tradeIndex].time <= t) {
+        currentNet = tradeEvents[tradeIndex].netProfit;
+        currentRaw = tradeEvents[tradeIndex].rawProfit;
+        tradeIndex++;
+      }
+
+      const timeSeconds = Math.floor(t / 1000);
+      withGasData.push({ time: timeSeconds, value: currentNet });
+      rawData.push({ time: timeSeconds, value: currentRaw });
+    }
+
+    // Make sure to include the final values at current time
+    const finalTimeSeconds = Math.floor(endMs / 1000);
+    if (withGasData.length === 0 || withGasData[withGasData.length - 1].time < finalTimeSeconds) {
+      withGasData.push({ time: finalTimeSeconds, value: currentNet });
+      rawData.push({ time: finalTimeSeconds, value: currentRaw });
+    }
+
+    return { tradePnLChartData: withGasData, tradePnLRawChartData: rawData };
+  }, [trades, timeRange, customDays]);
+
+  // Calculate trade USD profit statistics (both raw and with gas)
+  const tradeProfitStats = useMemo(() => {
+    // Return empty stats instead of null so we can still show the card
+    const emptyStats = {
+      totalNetProfit: 0,
+      totalRawProfit: 0,
+      totalGasCost: 0,
+      avgNetProfit: 0,
+      avgRawProfit: 0,
+      tradesWithProfit: 0,
+      tradesWithNetProfit: 0,
+      tradesWithRawProfit: 0,
+      profitableTrades: 0,
+      unprofitableTrades: 0,
+      totalGained: 0,
+      totalLost: 0,
+      avgGain: 0,
+      avgLoss: 0,
+      totalHours: 0,
+      startTime: null as string | null,
+      endTime: null as string | null,
+      netProfitPerHour: 0,
+      netProfitPerDay: 0,
+      rawProfitPerHour: 0,
+      rawProfitPerDay: 0,
+      netHigh: 0,
+      netLow: 0,
+      netAvg: 0,
+      rawHigh: 0,
+      rawLow: 0,
+      rawAvg: 0,
+      netVolatility: 0,
+      wins: 0,
+      losses: 0,
+      winRate: null as number | null,
+      totalTrades: 0,
+      avgApiDuration: null as number | null,
+    };
+
+    if (!trades || trades.length === 0) return emptyStats;
+
+    const tradesWithProfit = trades.filter((t: any) =>
+      t.profit_with_gas_usd !== null || t.raw_profit_usd !== null
+    );
+
+    if (tradesWithProfit.length === 0) return { ...emptyStats, totalTrades: trades.length };
+
+    // Sort by timestamp for period calculations
+    const sortedTrades = [...tradesWithProfit].sort(
+      (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+
+    // Net profit (with gas)
+    const netProfits = tradesWithProfit
+      .filter((t: any) => t.profit_with_gas_usd !== null)
+      .map((t: any) => t.profit_with_gas_usd);
+    const totalNetProfit = netProfits.reduce((sum: number, p: number) => sum + p, 0);
+
+    // Raw profit (without gas)
+    const rawProfits = tradesWithProfit
+      .filter((t: any) => t.raw_profit_usd !== null)
+      .map((t: any) => t.raw_profit_usd);
+    const totalRawProfit = rawProfits.reduce((sum: number, p: number) => sum + p, 0);
+
+    // Gas costs (difference between raw and net)
+    const totalGasCost = totalRawProfit - totalNetProfit;
+
+    const avgNetProfit = netProfits.length > 0 ? totalNetProfit / netProfits.length : 0;
+    const avgRawProfit = rawProfits.length > 0 ? totalRawProfit / rawProfits.length : 0;
+
+    // For gains/losses, use net profit
+    const positiveProfit = netProfits.filter((p: number) => p > 0);
+    const negativeProfit = netProfits.filter((p: number) => p < 0);
+
+    // Period calculations
+    const firstTrade = sortedTrades[0];
+    const lastTrade = sortedTrades[sortedTrades.length - 1];
+    const startTime = new Date(firstTrade.timestamp);
+    const endTime = new Date(lastTrade.timestamp);
+    const totalMilliseconds = endTime.getTime() - startTime.getTime();
+    const totalHours = totalMilliseconds / (1000 * 60 * 60);
+
+    // Profit per hour/day (net)
+    const netProfitPerHour = totalHours > 0 ? totalNetProfit / totalHours : 0;
+    const netProfitPerDay = netProfitPerHour * 24;
+
+    // Profit per hour/day (raw)
+    const rawProfitPerHour = totalHours > 0 ? totalRawProfit / totalHours : 0;
+    const rawProfitPerDay = rawProfitPerHour * 24;
+
+    // Calculate cumulative values for high/low/avg
+    let cumulativeNet = 0;
+    let cumulativeRaw = 0;
+    const cumulativeNetValues: number[] = [];
+    const cumulativeRawValues: number[] = [];
+
+    sortedTrades.forEach((t: any) => {
+      if (t.profit_with_gas_usd !== null) {
+        cumulativeNet += t.profit_with_gas_usd;
+        cumulativeNetValues.push(cumulativeNet);
+      }
+      if (t.raw_profit_usd !== null) {
+        cumulativeRaw += t.raw_profit_usd;
+        cumulativeRawValues.push(cumulativeRaw);
+      }
+    });
+
+    const netHigh = cumulativeNetValues.length > 0 ? Math.max(...cumulativeNetValues) : 0;
+    const netLow = cumulativeNetValues.length > 0 ? Math.min(...cumulativeNetValues) : 0;
+    const netAvg = cumulativeNetValues.length > 0 ? cumulativeNetValues.reduce((a, b) => a + b, 0) / cumulativeNetValues.length : 0;
+
+    const rawHigh = cumulativeRawValues.length > 0 ? Math.max(...cumulativeRawValues) : 0;
+    const rawLow = cumulativeRawValues.length > 0 ? Math.min(...cumulativeRawValues) : 0;
+    const rawAvg = cumulativeRawValues.length > 0 ? cumulativeRawValues.reduce((a, b) => a + b, 0) / cumulativeRawValues.length : 0;
+
+    // Volatility (standard deviation of cumulative net)
+    const netVariance = cumulativeNetValues.length > 0
+      ? cumulativeNetValues.reduce((sum, val) => sum + Math.pow(val - netAvg, 2), 0) / cumulativeNetValues.length
+      : 0;
+    const netVolatility = Math.sqrt(netVariance);
+
+    // Calculate wins/losses for filtered trades
+    const wins = trades.filter((t: any) => t.win === true || !t.opponent).length;
+    const losses = trades.filter((t: any) => t.win === false && t.opponent).length;
+    const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : null;
+
+    // Calculate avg API duration for filtered trades
+    const tradesWithDuration = trades.filter((t: any) => t.api_call_duration_ms !== null);
+    const avgApiDuration = tradesWithDuration.length > 0
+      ? tradesWithDuration.reduce((sum: number, t: any) => sum + t.api_call_duration_ms, 0) / tradesWithDuration.length
+      : null;
+
+    return {
+      totalNetProfit,
+      totalRawProfit,
+      totalGasCost,
+      avgNetProfit,
+      avgRawProfit,
+      tradesWithProfit: tradesWithProfit.length,
+      tradesWithNetProfit: netProfits.length,
+      tradesWithRawProfit: rawProfits.length,
+      profitableTrades: positiveProfit.length,
+      unprofitableTrades: negativeProfit.length,
+      totalGained: positiveProfit.reduce((sum: number, p: number) => sum + p, 0),
+      totalLost: Math.abs(negativeProfit.reduce((sum: number, p: number) => sum + p, 0)),
+      avgGain: positiveProfit.length > 0 ? positiveProfit.reduce((sum: number, p: number) => sum + p, 0) / positiveProfit.length : 0,
+      avgLoss: negativeProfit.length > 0 ? Math.abs(negativeProfit.reduce((sum: number, p: number) => sum + p, 0) / negativeProfit.length) : 0,
+      // Period stats
+      totalHours,
+      startTime: firstTrade.timestamp,
+      endTime: lastTrade.timestamp,
+      netProfitPerHour,
+      netProfitPerDay,
+      rawProfitPerHour,
+      rawProfitPerDay,
+      netHigh,
+      netLow,
+      netAvg,
+      rawHigh,
+      rawLow,
+      rawAvg,
+      netVolatility,
+      // Win/Loss stats for filtered period
+      wins,
+      losses,
+      winRate,
+      totalTrades: trades.length,
+      avgApiDuration,
+    };
+  }, [trades]);
+
+  // Convert trades to chart markers
+  const tradeMarkers: TradeMarker[] = useMemo(() => {
+    if (!trades || trades.length === 0) return [];
+
+    return trades.map((trade: any) => {
+      const timestamp = Math.floor(new Date(trade.timestamp).getTime() / 1000);
+      const hasOpponent = trade.opponent === true;
+      const isLoss = trade.win === false && hasOpponent;
+      const timeGap = trade.opponent_time_gap_ms;
+      const amount = (trade.trade_amount_rlb / 1000).toFixed(0);
+
+      // Simple logic: Loss = red, everything else = WIN (green)
+      let color: string;
+      let text: string;
+
+      if (isLoss) {
+        // Lost to opponent
+        color = '#ef4444'; // red
+        const timeText = timeGap ? `-${timeGap.toFixed(1)}ms` : '';
+        text = `⚔️ ${amount}k LOSS ${timeText}`;
+      } else {
+        // Win (either beat opponent or no opponent = auto win)
+        color = '#22c55e'; // green
+        const timeText = hasOpponent && timeGap ? `+${timeGap.toFixed(1)}ms` : '';
+        text = `⚔️ ${amount}k WIN ${timeText}`;
+      }
+
+      return {
+        time: timestamp,
+        position: 'aboveBar' as const,
+        color: color,
+        shape: 'circle' as const,
+        text: text,
+        size: 2,
+      };
+    });
+  }, [tradesData]);
 
   // Use ref for priceData to avoid recreating callback on price updates
   const priceDataRef = useRef(priceData);
@@ -382,15 +777,15 @@ export default function DashboardPage() {
       }));
   }, [downsampledHistory, useMockData, generateMockData]);
 
-  // RLB Price data for secondary chart series
+  // RLB Price data for secondary chart series (in cents, multiplied by 100)
   const chartDataRlbPrice = useMemo(() => {
-    if (useMockData) return generateMockData(0.075, 200);
+    if (useMockData) return generateMockData(7.5, 200); // Mock data in cents
 
     return downsampledHistory
       .filter((item) => item && item.rlb_price_usd != null && !isNaN(item.rlb_price_usd) && isFinite(item.rlb_price_usd) && item.rlb_price_usd > 0)
       .map((item) => ({
         time: Math.floor(new Date(item.timestamp).getTime() / 1000),
-        value: item.rlb_price_usd!
+        value: item.rlb_price_usd! * 100 // Convert to cents
       }));
   }, [downsampledHistory, useMockData, generateMockData]);
 
@@ -449,7 +844,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Handle remove high diff snapshots
+  // Handle remove high diff snapshots (OPTIMIZED)
   const handleRemoveHighDiff = async () => {
     try {
       setIsCleaningHighDiff(true);
@@ -458,8 +853,8 @@ export default function DashboardPage() {
       const maxIterations = 100; // Safety limit (increased for cascading anomalies)
 
       while (iteration < maxIterations) {
-        // Fetch current high diff snapshots
-        const highDiffData = await fetchHighDiffSnapshots();
+        // Fetch current high diff snapshots (OPTIMIZED: limit=100, fast mode)
+        const highDiffData = await fetchHighDiffSnapshots(100, true);
         const highDiffSnapshots = highDiffData.snapshotIds || [];
         const details = highDiffData.details || [];
 
@@ -482,7 +877,7 @@ export default function DashboardPage() {
           const moreText = details.length > 5 ? `\n... and ${details.length - 5} more` : '';
 
           const confirmed = window.confirm(
-            `Found ${highDiffSnapshots.length} snapshots with abnormal changes:\n\n${detailsText}${moreText}\n\n` +
+            `Found ${highDiffSnapshots.length}+ snapshots with abnormal changes:\n\n${detailsText}${moreText}\n\n` +
             '⚠️ PERMANENTLY DELETE these snapshots from the database?\n\n' +
             'This action cannot be undone!\n\n' +
             'Thresholds:\n- USDT/USD: ±300\n- RLB: ±999'
@@ -496,26 +891,21 @@ export default function DashboardPage() {
 
         setCleanupProgress({ current: totalDeleted, total: totalDeleted + highDiffSnapshots.length });
 
-        // Batch delete in parallel for efficiency (max 5 at a time)
-        const batchSize = 5;
-        for (let i = 0; i < highDiffSnapshots.length; i += batchSize) {
-          const batch = highDiffSnapshots.slice(i, i + batchSize);
-          const deletePromises = batch.map((snapshotId: string) =>
-            fetch(`/api/balance/high-diff/delete?snapshotId=${snapshotId}`, {
-              method: 'DELETE'
-            }).then(res => res.ok).catch(() => false)
-          );
-
-          const results = await Promise.all(deletePromises);
-          const successCount = results.filter(r => r).length;
-          totalDeleted += successCount;
-          setCleanupProgress({ current: totalDeleted, total: totalDeleted + (highDiffSnapshots.length - i - batch.length) });
+        // OPTIMIZED: Batch delete all at once instead of one-by-one
+        try {
+          const result = await batchDeleteSnapshots(highDiffSnapshots);
+          totalDeleted += result.data.deletedCount;
+          setCleanupProgress({ current: totalDeleted, total: totalDeleted });
+          console.log(`Batch ${iteration + 1}: Deleted ${result.data.deletedCount} snapshots`);
+        } catch (error) {
+          console.error('Batch delete failed:', error);
+          break;
         }
 
         iteration++;
 
-        // Small delay between iterations to avoid overwhelming the server
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Small delay between iterations
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
       if (iteration >= maxIterations) {
@@ -577,15 +967,7 @@ export default function DashboardPage() {
                 {isConnected ? 'Live' : 'Offline'}
               </span>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetch()}
-              disabled={isLoading}
-            >
-              <RefreshCw className={cn('h-4 w-4 mr-2', isLoading && 'animate-spin')} />
-              Refresh
-            </Button>
+           
             <Button
               variant="outline"
               size="sm"
@@ -609,7 +991,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Time Range Switcher - TradingView Style */}
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap ">
           <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Range:</span>
@@ -757,6 +1139,170 @@ export default function DashboardPage() {
         </Card>
       </div>
 
+      {/* Trade Performance P/L */}
+      {allTrades && allTrades.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Swords className="h-5 w-5 text-purple-600" />
+              Trade Performance P/L - {customDays ? `Last ${customDays} Days` : timeRange.toUpperCase()}
+            </CardTitle>
+            <CardDescription>
+              Cumulative USD profit from {tradeProfitStats?.tradesWithProfit || 0} trades in selected period ({tradeProfitStats ? formatDuration(tradeProfitStats.totalHours) : 'N/A'})
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {/* No trades message */}
+            {tradeProfitStats?.totalTrades === 0 && (
+              <div className="bg-muted/50 rounded-lg p-4 mb-6 text-center">
+                <p className="text-muted-foreground">
+                  No trades in {customDays ? `last ${customDays} days` : `last ${timeRange === '1h' ? '1 hour' : timeRange === '6h' ? '6 hours' : timeRange === '24h' ? '24 hours' : timeRange === '7d' ? '7 days' : timeRange === '30d' ? '30 days' : 'selected period'}`}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Total trades (all time): {allTrades.length}
+                </p>
+              </div>
+            )}
+
+            {/* Trade Stats Grid - Row 1: Main P/L stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+              {/* Raw P/L (no gas) */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground flex items-center gap-1">
+                  <div className="w-2 h-2 rounded-full bg-orange-500" /> Raw P/L
+                </p>
+                <p className={cn('text-2xl font-bold', (tradeProfitStats?.totalRawProfit || 0) >= 0 ? 'text-orange-500' : 'text-red-600')}>
+                  {(tradeProfitStats?.totalRawProfit || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.totalRawProfit || 0, 2)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Per hour: {(tradeProfitStats?.rawProfitPerHour || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.rawProfitPerHour || 0, 2)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Per day: {(tradeProfitStats?.rawProfitPerDay || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.rawProfitPerDay || 0, 2)}
+                </p>
+              </div>
+
+              {/* Net P/L (with gas) */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground flex items-center gap-1">
+                  <div className={cn('w-2 h-2 rounded-full', (tradeProfitStats?.totalNetProfit || 0) >= 0 ? 'bg-green-500' : 'bg-red-500')} /> Net P/L
+                </p>
+                <p className={cn('text-2xl font-bold', (tradeProfitStats?.totalNetProfit || 0) >= 0 ? 'text-green-600' : 'text-red-600')}>
+                  {(tradeProfitStats?.totalNetProfit || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.totalNetProfit || 0, 2)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Per hour: {(tradeProfitStats?.netProfitPerHour || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.netProfitPerHour || 0, 2)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Per day: {(tradeProfitStats?.netProfitPerDay || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.netProfitPerDay || 0, 2)}
+                </p>
+              </div>
+
+              {/* Gas Costs */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Gas Spent</p>
+                <p className="text-2xl font-bold text-red-500">
+                  -${formatNumber(tradeProfitStats?.totalGasCost || 0, 2)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  total fees
+                </p>
+              </div>
+
+              {/* Win Rate */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground flex items-center gap-1">
+                  <Trophy className="h-3 w-3" /> Win Rate
+                </p>
+                <p className={cn('text-2xl font-bold', tradeProfitStats?.winRate !== null && (tradeProfitStats?.winRate || 0) >= 50 ? 'text-green-600' : 'text-red-600')}>
+                  {tradeProfitStats?.winRate !== null ? `${tradeProfitStats.winRate.toFixed(1)}%` : 'N/A'}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {tradeProfitStats?.wins || 0}W / {tradeProfitStats?.losses || 0}L
+                </p>
+              </div>
+            </div>
+
+            {/* Trade Stats Grid - Row 2: Range & Period stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6 pt-4 border-t">
+              {/* Range (Net) */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Range (Net)</p>
+                <p className="text-sm">
+                  <span className="text-green-600 font-semibold">High: ${formatNumber(tradeProfitStats?.netHigh || 0, 2)}</span>
+                </p>
+                <p className="text-sm">
+                  <span className="text-red-600 font-semibold">Low: ${formatNumber(tradeProfitStats?.netLow || 0, 2)}</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Volatility: ±${formatNumber(tradeProfitStats?.netVolatility || 0, 2)}
+                </p>
+              </div>
+
+              {/* Avg per Trade */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Avg per Trade</p>
+                <p className="text-sm">
+                  <span className="text-orange-500 font-semibold">Raw: {(tradeProfitStats?.avgRawProfit || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.avgRawProfit || 0, 2)}</span>
+                </p>
+                <p className="text-sm">
+                  <span className={cn('font-semibold', (tradeProfitStats?.avgNetProfit || 0) >= 0 ? 'text-green-600' : 'text-red-600')}>Net: {(tradeProfitStats?.avgNetProfit || 0) >= 0 ? '+' : ''}${formatNumber(tradeProfitStats?.avgNetProfit || 0, 2)}</span>
+                </p>
+              </div>
+
+              {/* Period Start/End */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Period</p>
+                <p className="text-xs font-mono">{tradeProfitStats?.startTime ? new Date(tradeProfitStats.startTime).toLocaleString() : 'N/A'}</p>
+                <p className="text-xs font-mono">{tradeProfitStats?.endTime ? new Date(tradeProfitStats.endTime).toLocaleString() : 'N/A'}</p>
+              </div>
+
+              {/* Data Points & Response Speed */}
+              <div className="space-y-1">
+                <p className="text-sm text-muted-foreground">Stats</p>
+                <p className="text-sm">
+                  <span className="font-semibold">{tradeProfitStats?.totalTrades || 0}</span> trades
+                </p>
+                <p className="text-sm">
+                  <span className="text-blue-600 font-semibold">{tradeProfitStats?.avgApiDuration !== null ? `${tradeProfitStats.avgApiDuration.toFixed(0)}ms` : 'N/A'}</span> avg speed
+                </p>
+              </div>
+            </div>
+
+            {/* Cumulative P/L Chart - Raw (orange) vs With Gas (green/red) */}
+            {(tradePnLChartData.length > 0 || tradePnLRawChartData.length > 0) ? (
+              <>
+                <div className="flex items-center gap-4 mb-2 text-xs">
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-full bg-orange-500" />
+                    <span className="text-muted-foreground">Raw Profit (no gas)</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className={cn('w-3 h-3 rounded-full', tradePnLChartData[tradePnLChartData.length - 1]?.value >= 0 ? 'bg-green-500' : 'bg-red-500')} />
+                    <span className="text-muted-foreground">Net Profit (with gas)</span>
+                  </div>
+                </div>
+                <TradingViewChart
+                  key={`trade-pnl-${tradePnLChartData.length}-${tradePnLRawChartData.length}`}
+                  data={tradePnLChartData.length > 0 ? tradePnLChartData : tradePnLRawChartData}
+                  secondaryData={tradePnLRawChartData.length > 0 ? tradePnLRawChartData : undefined}
+                  color={tradePnLChartData[tradePnLChartData.length - 1]?.value >= 0 ? '#22c55e' : '#ef4444'}
+                  secondaryColor="#f97316"
+                  height={300}
+                  valueFormatter={(value) => `${value >= 0 ? '+' : ''}$${formatNumber(value, 2)}`}
+                  secondaryFormatter={(value) => `Raw: ${value >= 0 ? '+' : ''}$${formatNumber(value, 2)}`}
+                  showSecondary={tradePnLRawChartData.length > 0}
+                />
+              </>
+            ) : (
+              <div className="flex items-center justify-center h-[300px] text-muted-foreground">
+                No trade profit data available yet
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
@@ -811,7 +1357,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              ${formatNumber(priceData?.price_usd || currentBalance.rlb_price_usd || 0, 6)}
+              ${formatNumber(priceData?.price_usd || currentBalance.rlb_price_usd || 0, 5)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               Current market price (CoinGecko)
@@ -1073,7 +1619,7 @@ export default function DashboardPage() {
 
                 return (
                   <span className="block mt-1 text-xs">
-                    RLB Price Range: ${minPrice.toFixed(6)} - ${maxPrice.toFixed(6)} (avg: ${avgPrice.toFixed(6)})
+                    RLB Price Range: ${minPrice.toFixed(5)} - ${maxPrice.toFixed(5)} (avg: ${avgPrice.toFixed(5)})
                   </span>
                 );
               }
@@ -1092,15 +1638,17 @@ export default function DashboardPage() {
             </div>
           ) : (
             <TradingViewChart
-              key={`usd-${timeRange}-${customDays}-${chartDataUsd.length}`}
+              key={`usd-${timeRange}-${customDays}-${chartDataUsd.length}-${tradeMarkers.length}`}
               data={chartDataUsd}
               secondaryData={chartDataRlbPrice}
+              markers={tradeMarkers}
               color="#2962FF"
               secondaryColor="#FF6B35"
               height={400}
               valueFormatter={(value) => `$${value.toFixed(2)}`}
-              secondaryFormatter={(value) => `RLB: $${value.toFixed(6)}`}
+              secondaryFormatter={(value) => `RLB: ${value.toFixed(3)}¢`}
               showSecondary={chartDataRlbPrice.length > 0}
+              showMarkers={true}
             />
           )}
         </CardContent>
@@ -1125,11 +1673,13 @@ export default function DashboardPage() {
             </div>
           ) : (
             <TradingViewChart
-              key={`usdt-${timeRange}-${customDays}-${chartDataUsdUsdt.length}`}
+              key={`usdt-${timeRange}-${customDays}-${chartDataUsdUsdt.length}-${tradeMarkers.length}`}
               data={chartDataUsdUsdt}
+              markers={tradeMarkers}
               color="#26a69a"
               height={400}
               valueFormatter={(value) => `$${value.toFixed(2)}`}
+              showMarkers={true}
             />
           )}
         </CardContent>
@@ -1196,7 +1746,7 @@ export default function DashboardPage() {
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Current RLB Price:</span>
               <span className="font-semibold text-xs">
-                ${currentBalance.rlb_price_usd.toFixed(6)} (updated: {new Date(currentBalance.rlb_price_last_updated).toLocaleString()})
+                ${currentBalance.rlb_price_usd.toFixed(5)} (updated: {new Date(currentBalance.rlb_price_last_updated).toLocaleString()})
               </span>
             </div>
           )}

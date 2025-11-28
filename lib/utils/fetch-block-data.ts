@@ -54,36 +54,93 @@ export interface BlockData {
  * Returns:
  *   SlotInfo object or null if not found
  */
-export async function getBlockHashFromSlot(slot: number): Promise<SlotInfo | null> {
+// Simple in-memory cache for slot data
+const slotCache = new Map<number, { data: SlotInfo | null; timestamp: number }>();
+const CACHE_TTL = 60 * 1000; // 1 minute cache
+
+/**
+ * Get block information from slot using local beacon node
+ * Falls back to Beaconcha.in if local node fails
+ */
+async function getBlockFromLocalNode(slot: number): Promise<SlotInfo | null> {
   try {
-    const apiKey = process.env.BEACONCHAIN_API_KEY;
-    const beaconchaUrl = `https://beaconcha.in/api/v1/slot/${slot}`;
+    // Use local beacon node API (Grandine on port 5052)
+    const localNodeUrl = process.env.BEACON_NODE_URL || 'http://localhost:5052';
+    const url = `${localNodeUrl}/eth/v2/beacon/blocks/${slot}`;
 
-    const headers: HeadersInit = {};
-    if (apiKey) {
-      headers['apikey'] = apiKey;
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (!response.ok) {
+      console.log(`Local node returned ${response.status} for slot ${slot}`);
+      return null;
     }
 
-    const response = await fetch(beaconchaUrl, { headers });
-    const data = await response.json();
-    if (data.status === "OK" && data.data) {
-      return {
-        slot: data.data.slot,
-        epoch: data.data.epoch,
-        blockRoot: data.data.blockroot,
-        stateRoot: data.data.stateroot,
-        proposerIndex: data.data.proposer,
-        executionBlockHash: data.data.exec_block_hash,
-        executionBlockNumber: data.data.exec_block_number,
-        status: data.data.status
-      };
+    const result = await response.json();
+    if (result.data) {
+      const block = result.data;
+      const message = block.message;
+
+      // Extract execution payload information
+      const executionPayload = message.body?.execution_payload;
+
+      if (executionPayload) {
+        return {
+          slot: parseInt(message.slot),
+          epoch: Math.floor(parseInt(message.slot) / 32),
+          blockRoot: block.signature || '',
+          stateRoot: message.state_root,
+          proposerIndex: parseInt(message.proposer_index),
+          executionBlockHash: executionPayload.block_hash,
+          executionBlockNumber: parseInt(executionPayload.block_number),
+          status: 'proposed'
+        };
+      }
     }
+
     return null;
   } catch (error) {
-    console.error('Error fetching slot:', error);
+    console.log('Failed to fetch from local node:', error);
     return null;
   }
 }
+
+// REMOVED: getBlockHashFromEthRPC function - no longer using ETH RPC fallback
+
+export async function getBlockHashFromSlot(slot: number): Promise<SlotInfo | null> {
+  try {
+    // Check cache first
+    const cached = slotCache.get(slot);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log(`Using cached slot data for slot ${slot}`);
+      return cached.data;
+    }
+
+    // Only use local beacon node - no fallback
+    const localResult = await getBlockFromLocalNode(slot);
+    if (localResult) {
+      console.log(`Got slot ${slot} data from local node`);
+      // Cache the result
+      slotCache.set(slot, { data: localResult, timestamp: Date.now() });
+      return localResult;
+    }
+
+    // No fallback - if beacon node fails, return null
+    console.log(`Local beacon node failed for slot ${slot}, no fallback configured`);
+    // Cache null result to prevent immediate retries
+    slotCache.set(slot, { data: null, timestamp: Date.now() });
+    return null;
+  } catch (error) {
+    console.error('Error fetching slot:', error);
+    // Cache null result for errors
+    slotCache.set(slot, { data: null, timestamp: Date.now() });
+    return null;
+  }
+}
+
+// Cache for BloxRoute data
+const bloxrouteCache = new Map<string, { data: BloxrouteData | null; timestamp: number }>();
 
 /**
  * Query Bloxroute BDN Explorer for block data
@@ -95,11 +152,19 @@ export async function getBlockHashFromSlot(slot: number): Promise<SlotInfo | nul
  *   BloxrouteData object or null if not found
  */
 export async function queryBloxroute(blockHash: string): Promise<BloxrouteData | null> {
+  // Remove 0x prefix if present
+  const hashWithoutPrefix = blockHash.replace('0x', '');
+
   try {
-    // Remove 0x prefix if present
-    const hashWithoutPrefix = blockHash.replace('0x', '');
-    // wait for 3 seconds
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // Check cache first
+    const cached = bloxrouteCache.get(hashWithoutPrefix);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log(`Using cached BloxRoute data for hash ${hashWithoutPrefix}`);
+      return cached.data;
+    }
+
+    // Add a smaller delay to avoid hammering the API
+    await new Promise(resolve => setTimeout(resolve, 1000));
     const url = `https://kn8z1kqm76.execute-api.us-east-1.amazonaws.com/prod/block/${hashWithoutPrefix}?bxenvironment=blxrbdn.com&network_num=5`;
 
     const response = await fetch(url, {
@@ -123,19 +188,47 @@ export async function queryBloxroute(blockHash: string): Promise<BloxrouteData |
     if (response.status === 200) {
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
-        return await response.json();
+        const data = await response.json();
+
+        // Check if the response indicates the block was not found
+        if (data.errors && data.errors.message === "Block was not found") {
+          console.error(`Bloxroute: Block ${hashWithoutPrefix} not found in BDN network`);
+          console.error(`Bloxroute response: ${JSON.stringify(data.errors)}`);
+          // Cache null result
+          bloxrouteCache.set(hashWithoutPrefix, { data: null, timestamp: Date.now() });
+          return null;
+        }
+
+        // Cache successful result
+        bloxrouteCache.set(hashWithoutPrefix, { data, timestamp: Date.now() });
+        return data;
       } else {
         const text = await response.text();
         console.error('Bloxroute returned non-JSON response:', text);
+        // Cache null result
+        bloxrouteCache.set(hashWithoutPrefix, { data: null, timestamp: Date.now() });
         return null;
       }
+    } else if (response.status === 429) {
+      const body = await response.text();
+      console.error(`Bloxroute rate limited for hash ${hashWithoutPrefix}: ${response.status}`);
+      console.error(`Response body: ${body}`);
+      // Cache null result to prevent immediate retries
+      bloxrouteCache.set(hashWithoutPrefix, { data: null, timestamp: Date.now() });
+      return null;
     } else {
-      console.error(`Bloxroute API returned status: ${response.status}`);
+      const body = await response.text();
+      console.error(`Bloxroute API error for hash ${hashWithoutPrefix}: ${response.status} ${response.statusText}`);
+      console.error(`Response body: ${body}`);
+      // Cache null result
+      bloxrouteCache.set(hashWithoutPrefix, { data: null, timestamp: Date.now() });
       return null;
     }
 
   } catch (error) {
     console.error('Error querying Bloxroute:', error);
+    // Cache null result for errors
+    bloxrouteCache.set(hashWithoutPrefix, { data: null, timestamp: Date.now() });
     return null;
   }
 }
@@ -178,14 +271,29 @@ export async function queryBloxrouteReceive(blockHash: string): Promise<Bloxrout
     if (response.status === 200) {
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
-        return await response.json();
+        const data = await response.json();
+
+        // Check if the response indicates an error
+        if (data.errors) {
+          console.error(`Bloxroute receipts error for hash ${hashWithoutPrefix}: ${JSON.stringify(data.errors)}`);
+          return null;
+        }
+
+        return data;
       } else {
         const text = await response.text();
         console.error('Bloxroute receipts returned non-JSON response:', text);
         return null;
       }
+    } else if (response.status === 429) {
+      const body = await response.text();
+      console.error(`Bloxroute receipts rate limited for hash ${hashWithoutPrefix}: ${response.status}`);
+      console.error(`Response body: ${body}`);
+      return null;
     } else {
-      console.error(`Bloxroute receipts API returned status: ${response.status}`);
+      const body = await response.text();
+      console.error(`Bloxroute receipts API error for hash ${hashWithoutPrefix}: ${response.status} ${response.statusText}`);
+      console.error(`Response body: ${body}`);
       return null;
     }
 

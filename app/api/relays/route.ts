@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db/prisma';
 import { calculateRankingScore } from '@/lib/utils/ranking';
 import { RelayDataSchema } from '@/lib/utils/validation';
@@ -10,19 +11,63 @@ import type { ApiResponse, RelayDataResponse } from '@/lib/types/api';
 
 // POST /api/relays - Create new relay data for a block
 export async function POST(request: NextRequest) {
+  let validated: z.infer<typeof RelayDataSchema> | null = null;
+
   try {
     const body = await request.json();
-    
-    const validated = RelayDataSchema.parse(body);
+
+    validated = RelayDataSchema.parse(body);
 
     // Check if block already exists
-    const exists = await blockExists(validated.block_number);
-    if (exists) {
-      return NextResponse.json<ApiResponse>({
-        success: false,
-        error: 'Block already exists',
-        details: { block_number: validated.block_number }
-      }, { status: 409 });
+    // Reason: Gateway sends multiple requests - first with partial data, then with complete data
+    // We want to keep the most complete data (most relays)
+    const existingBlock = await prisma.block.findUnique({
+      where: { block_number: validated.block_number },
+      include: { relay_details: true }
+    });
+
+    if (existingBlock) {
+      const existingRelayCount = existingBlock.relay_details.length;
+      const newRelayCount = validated.relay_details.length;
+
+      // If new data has more relays, update the block with better data
+      if (newRelayCount > existingRelayCount) {
+        console.log(`Block ${validated.block_number} exists with ${existingRelayCount} relays, updating with ${newRelayCount} relays`);
+
+        // Delete old relay details and update with new ones
+        await prisma.relayDetail.deleteMany({
+          where: { block_id: existingBlock.id }
+        });
+
+        const relayDetails = validated.relay_details.map((detail, index) => ({
+          relay_name: detail.name,
+          latency: detail.latency,
+          loss: detail.loss,
+          arrival_order: index,
+          arrival_timestamp: new Date(detail.arrival_timestamp),
+          ranking_score: calculateRankingScore(detail, index)
+        }));
+
+        await prisma.relayDetail.createMany({
+          data: relayDetails.map(rd => ({
+            ...rd,
+            block_id: existingBlock.id
+          }))
+        });
+
+        return NextResponse.json<ApiResponse>({
+          success: true,
+          message: `Block updated with more complete data (${existingRelayCount} → ${newRelayCount} relays)`,
+          data: { block_number: validated.block_number, relay_count: newRelayCount }
+        }, { status: 200 });
+      } else {
+        console.log(`Block ${validated.block_number} already exists with ${existingRelayCount} relays (incoming: ${newRelayCount}), keeping existing`);
+        return NextResponse.json<ApiResponse>({
+          success: true,
+          message: 'Block already exists (duplicate accepted)',
+          data: { block_number: validated.block_number }
+        }, { status: 200 });
+      }
     }
 
     // Calculate ranking scores for each relay
@@ -135,6 +180,20 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
+    // Handle Prisma unique constraint violation (P2002) - race condition
+    // Reason: Between the blockExists check and insert, another request created the block
+    // Return success to avoid gateway retries
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const blockNumber = validated?.block_number ?? 'unknown';
+
+      console.log(`Race condition: Block ${blockNumber} was inserted by concurrent request, returning success`);
+      return NextResponse.json<ApiResponse>({
+        success: true,
+        message: 'Block already exists (race condition, duplicate accepted)',
+        data: { block_number: blockNumber }
+      }, { status: 200 });
+    }
+
     console.error('Error processing relay data:', error);
     return NextResponse.json<ApiResponse>({
       success: false,
@@ -143,10 +202,29 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET /api/relays - Get latest relay rankings
+// GET /api/relays - Get latest relay rankings or unique relay names
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
+    const uniqueNames = searchParams.get('uniqueNames') === 'true';
+
+    // If requesting unique relay names
+    if (uniqueNames) {
+      const relayNames = await prisma.relayDetail.findMany({
+        select: { relay_name: true },
+        distinct: ['relay_name'],
+        orderBy: { relay_name: 'asc' },
+      });
+
+      return NextResponse.json<ApiResponse>({
+        success: true,
+        data: {
+          relayNames: relayNames.map(r => r.relay_name),
+        }
+      });
+    }
+
+    // Otherwise, return relay rankings as before
     const limit = parseInt(searchParams.get('limit') || '20', 10);
     const offset = parseInt(searchParams.get('offset') || '0', 10);
 

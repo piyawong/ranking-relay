@@ -52,5 +52,24 @@ app.prepare().then(() => {
   httpServer.listen(port, () => {
     console.log(`> Ready on http://${hostname}:${port}`);
     console.log(`> Socket.IO server initialized on /api/socket.io`);
+
+    // Start price refresh service to actively update prices every minute
+    try {
+      console.log('[Server] Loading price refresh service...');
+      const { startPriceRefreshService } = require('./lib/services/price-refresh-service.js');
+      startPriceRefreshService();
+    } catch (err) {
+      console.error('[Server] ERROR loading price refresh service:', err);
+    }
+
+    // Start price backfill service to ensure RLB prices are always up-to-date
+    // This runs every 5 minutes as a safety net for any snapshots without prices
+    try {
+      console.log('[Server] Loading price backfill service...');
+      const { startPriceBackfillService } = require('./lib/services/price-backfill-service.js');
+      startPriceBackfillService();
+    } catch (err) {
+      console.error('[Server] ERROR loading price backfill service:', err);
+    }
   });
 });

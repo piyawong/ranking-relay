@@ -35,6 +35,19 @@ io.on('connection', (socket) => {
       const validated = BalanceSnapshotSchema.parse(data);
       const timestamp = validated.ts ? new Date(validated.ts) : new Date();
 
+      // Fetch current RLB price from API
+      let rlbPrice = null;
+      try {
+        const response = await fetch('http://localhost:3000/api/balance/price');
+        if (response.ok) {
+          const priceData = await response.json();
+          rlbPrice = priceData.data?.price_usd || null;
+        }
+      } catch (error) {
+        console.error('[Socket.IO] Failed to fetch RLB price:', error);
+        // Continue without price
+      }
+
       const snapshot = await prisma.balanceSnapshot.create({
         data: {
           timestamp,
@@ -43,6 +56,7 @@ io.on('connection', (socket) => {
           onchain_usdt: validated.onchain.usdt,
           onsite_rlb: validated.onsite.rlb,
           onsite_usd: validated.onsite.usd,
+          rlb_price_usd: rlbPrice,
         }
       });
 

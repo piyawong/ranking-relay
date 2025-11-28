@@ -141,3 +141,20 @@ model RelayNode {
   @@index([status])
   @@index([country])
 }
+
+// Cache for validator -> entity mapping (Lido, Binance, ether.fi, etc.)
+model ValidatorEntity {
+  id               String   @id @default(uuid())
+  validator_index  Int      @unique  // The proposer/validator index
+  entity_name      String?  // e.g., "Lido", "Binance", "ether.fi", "Coinbase"
+  pool_name        String?  // Specific pool name if available
+  withdrawal_address String?
+  activation_epoch Int?
+  exit_epoch       Int?
+  last_fetched     DateTime @default(now())
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([validator_index])
+  @@index([entity_name])
+}
