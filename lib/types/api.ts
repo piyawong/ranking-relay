@@ -22,6 +22,9 @@ export interface RankingItem {
 export interface BlockData {
   id: string;
   block_number: number;
+  block_hash?: string;
+  origin?: string;
+  bloxroute_timestamp?: string;
   created_at: string;
   updated_at: string;
   relay_details: RelayDetailData[];
@@ -34,6 +37,7 @@ export interface RelayDetailData {
   latency: number;
   loss: number;
   arrival_order: number;
+  arrival_timestamp: string;
   ranking_score: number;
   created_at: string;
 }

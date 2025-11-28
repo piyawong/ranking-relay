@@ -17,6 +17,9 @@ async function main() {
     // Randomize relay order for each block
     const shuffled = [...relayNames].sort(() => Math.random() - 0.5);
 
+    // Base timestamp for this block
+    const baseTimestamp = new Date(Date.now() - (1010 - blockNum) * 60000); // Each block is ~1 min apart
+
     const block = await prisma.block.create({
       data: {
         block_number: blockNum,
@@ -26,6 +29,7 @@ async function main() {
             latency: parseFloat((10 + Math.random() * 20).toFixed(2)),
             loss: parseFloat((Math.random() * 2).toFixed(2)),
             arrival_order: index,
+            arrival_timestamp: new Date(baseTimestamp.getTime() + index * 100), // Each relay arrives 100ms apart
             ranking_score: parseFloat((index * 50 + (10 + Math.random() * 20) * 0.3 + Math.random() * 2 * 0.2).toFixed(2))
           }))
         }

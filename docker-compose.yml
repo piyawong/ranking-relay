@@ -1,20 +1,21 @@
-version: '3.8'
-
 services:
   webapp:
     build: .
     ports:
       - "3000:3000"
+      - "3001:3001"
     environment:
       DATABASE_URL: postgresql://relay_user:relay_pass@postgres:5432/relay_db
       NODE_ENV: production
       NEXT_PUBLIC_API_URL: http://localhost:3000
+      SOCKET_PORT: 3001
+      BEACONCHAIN_API_KEY: d0c5T1hIOG9JZmtteWZWUVJpSFc2SHJlRHpWZQ
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

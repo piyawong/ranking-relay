@@ -67,12 +67,41 @@ export async function createBlock(
     latency: number;
     loss: number;
     arrival_order: number;
+    arrival_timestamp: Date;
     ranking_score: number;
-  }>
+  }>,
+  origin?: string,
+  bloxrouteTimestamp?: Date,
+  blockHash?: string
 ): Promise<BlockWithDetails> {
+  // Calculate comparison if we have both bloxroute timestamp and relay details
+  let isWinBloxroute: boolean | undefined;
+  let timeDifferenceMs: number | undefined;
+
+  if (bloxrouteTimestamp && relayDetails.length > 0) {
+    // Get first relay (lowest arrival_order)
+    const firstRelay = relayDetails.reduce((prev, current) =>
+      prev.arrival_order < current.arrival_order ? prev : current
+    );
+
+    const firstRelayTime = new Date(firstRelay.arrival_timestamp).getTime();
+    const bloxrouteTime = new Date(bloxrouteTimestamp).getTime();
+
+    // Calculate absolute time difference
+    timeDifferenceMs = Math.abs(firstRelayTime - bloxrouteTime);
+
+    // Determine winner (bloxroute wins if it arrives first)
+    isWinBloxroute = bloxrouteTime < firstRelayTime;
+  }
+
   return prisma.block.create({
     data: {
       block_number: blockNumber,
+      block_hash: blockHash,
+      origin: origin,
+      bloxroute_timestamp: bloxrouteTimestamp,
+      is_win_bloxroute: isWinBloxroute,
+      time_difference_ms: timeDifferenceMs,
       relay_details: {
         create: relayDetails
       }

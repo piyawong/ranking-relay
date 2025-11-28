@@ -12,13 +12,25 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { RefreshCw, TrendingUp, Award, Zap, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { RefreshCw, TrendingUp, Award, Zap, ChevronDown, ChevronRight, ExternalLink, Trash2, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 
 // Fetch relay statistics with rankings
-async function fetchRelayStatistics() {
-  const response = await fetch('/api/statistics');
+async function fetchRelayStatistics(timeRange: string, blockRange?: number) {
+  const params = new URLSearchParams();
+  if (timeRange) params.set('timeRange', timeRange);
+  if (blockRange) params.set('blockRange', blockRange.toString());
+
+  const response = await fetch(`/api/statistics?${params.toString()}`);
   if (!response.ok) throw new Error('Failed to fetch statistics');
   const data = await response.json();
   return data.data;
@@ -35,10 +47,13 @@ async function fetchRelayBlocks(relayName: string) {
 export default function RankingsPage() {
   const router = useRouter();
   const [expandedRelay, setExpandedRelay] = useState<string | null>(null);
+  const [isFlushing, setIsFlushing] = useState(false);
+  const [timeRange, setTimeRange] = useState<string>('all');
+  const [blockRange, setBlockRange] = useState<string>('');
 
   const { data: statsData, isLoading, refetch } = useQuery({
-    queryKey: ['relay-statistics'],
-    queryFn: fetchRelayStatistics,
+    queryKey: ['relay-statistics', timeRange, blockRange],
+    queryFn: () => fetchRelayStatistics(timeRange, blockRange ? parseInt(blockRange) : undefined),
   });
 
   // Fetch blocks for expanded relay
@@ -58,28 +73,131 @@ export default function RankingsPage() {
   };
 
   const handleBlockClick = (blockNumber: number) => {
-    router.push(`/dashboard?block=${blockNumber}`);
+    router.push(`/slots?block=${blockNumber}`);
+  };
+
+  // Flush all relay/block data
+  const handleFlushData = async () => {
+    const confirmed = window.confirm(
+      '⚠️ WARNING: This will delete ALL relay and block data!\n\n' +
+      'This includes:\n' +
+      '- All blocks\n' +
+      '- All relay details\n' +
+      '- All relay statistics\n\n' +
+      'This action cannot be undone. Are you sure you want to continue?'
+    );
+    
+    if (!confirmed) return;
+    
+    setIsFlushing(true);
+    try {
+      const response = await fetch('/api/relays?confirm=true', {
+        method: 'DELETE'
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to flush data');
+      }
+      // Refetch data after flush
+      refetch();
+      alert('All relay and block data has been deleted successfully.');
+    } catch (error) {
+      alert(`Error: ${error instanceof Error ? error.message : 'Failed to flush data'}`);
+    } finally {
+      setIsFlushing(false);
+    }
   };
 
   return (
     <div className="space-y-6">
       {/* Header Section */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Relay Rankings</h1>
-          <p className="text-muted-foreground">
-            Overall performance rankings based on historical data
-          </p>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Relay Rankings</h1>
+            <p className="text-muted-foreground">
+              Overall performance rankings based on historical data
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              disabled={isLoading}
+            >
+              <RefreshCw className={cn('h-4 w-4 mr-2', isLoading && 'animate-spin')} />
+              Refresh
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleFlushData}
+              disabled={isFlushing || isLoading}
+            >
+              <Trash2 className={cn('h-4 w-4 mr-2', isFlushing && 'animate-spin')} />
+              {isFlushing ? 'Flushing...' : 'Flush All Data'}
+            </Button>
+          </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isLoading}
-        >
-          <RefreshCw className={cn('h-4 w-4 mr-2', isLoading && 'animate-spin')} />
-          Refresh
-        </Button>
+
+        {/* Filter Section */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Filter className="h-4 w-4" />
+              Filters
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-4 md:flex-row md:items-end">
+              <div className="flex-1 space-y-2">
+                <label htmlFor="time-range" className="text-sm font-medium">
+                  Time Range
+                </label>
+                <Select value={timeRange} onValueChange={setTimeRange}>
+                  <SelectTrigger id="time-range">
+                    <SelectValue placeholder="Select time range" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Time</SelectItem>
+                    <SelectItem value="1h">Last 1 Hour</SelectItem>
+                    <SelectItem value="6h">Last 6 Hours</SelectItem>
+                    <SelectItem value="24h">Last 24 Hours</SelectItem>
+                    <SelectItem value="7d">Last 7 Days</SelectItem>
+                    <SelectItem value="30d">Last 30 Days</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1 space-y-2">
+                <label htmlFor="block-range" className="text-sm font-medium">
+                  Block Range (Last N blocks)
+                </label>
+                <Input
+                  id="block-range"
+                  type="number"
+                  placeholder="e.g., 100"
+                  value={blockRange}
+                  onChange={(e) => setBlockRange(e.target.value)}
+                  min="1"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setTimeRange('all');
+                  setBlockRange('');
+                }}
+              >
+                Clear Filters
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Note: Block range filter takes precedence over time range if both are set.
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Summary Stats */}

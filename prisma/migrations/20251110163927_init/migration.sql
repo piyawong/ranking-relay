@@ -1,7 +1,23 @@
 -- CreateTable
+CREATE TABLE "BalanceSnapshot" (
+    "id" TEXT NOT NULL,
+    "timestamp" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "pid" INTEGER,
+    "onchain_rlb" DECIMAL(20,8) NOT NULL,
+    "onchain_usdt" DECIMAL(20,8) NOT NULL,
+    "onsite_rlb" DECIMAL(20,8) NOT NULL,
+    "onsite_usd" DECIMAL(20,8) NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "BalanceSnapshot_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "Block" (
     "id" TEXT NOT NULL,
     "block_number" INTEGER NOT NULL,
+    "origin" TEXT,
+    "bloxroute_timestamp" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -16,6 +32,7 @@ CREATE TABLE "RelayDetail" (
     "latency" DECIMAL(10,2) NOT NULL,
     "loss" DECIMAL(5,2) NOT NULL,
     "arrival_order" INTEGER NOT NULL,
+    "arrival_timestamp" TIMESTAMP(3) NOT NULL,
     "ranking_score" DECIMAL(10,2) NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -36,6 +53,12 @@ CREATE TABLE "RelayStatistics" (
 );
 
 -- CreateIndex
+CREATE INDEX "BalanceSnapshot_created_at_idx" ON "BalanceSnapshot"("created_at");
+
+-- CreateIndex
+CREATE INDEX "BalanceSnapshot_timestamp_idx" ON "BalanceSnapshot"("timestamp");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Block_block_number_key" ON "Block"("block_number");
 
 -- CreateIndex
@@ -49,6 +72,9 @@ CREATE INDEX "RelayDetail_relay_name_idx" ON "RelayDetail"("relay_name");
 
 -- CreateIndex
 CREATE INDEX "RelayDetail_ranking_score_idx" ON "RelayDetail"("ranking_score");
+
+-- CreateIndex
+CREATE INDEX "RelayDetail_arrival_timestamp_idx" ON "RelayDetail"("arrival_timestamp");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "RelayStatistics_relay_name_key" ON "RelayStatistics"("relay_name");

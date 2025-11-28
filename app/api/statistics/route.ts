@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getAllStatistics,
   getRelayStatistics,
-  getPerformanceSummary
+  getPerformanceSummary,
+  updateAllStatistics
 } from '@/lib/db/queries/statistics';
 import { StatsQuerySchema } from '@/lib/utils/validation';
 import { decimalToNumber } from '@/lib/utils/format';
@@ -43,14 +44,19 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Get all statistics
+    // Get all statistics with filters
+    const filters = {
+      timeRange: query.timeRange,
+      blockRange: query.blockRange
+    };
+
     const [allStats, summary] = await Promise.all([
-      getAllStatistics(),
-      getPerformanceSummary()
+      getAllStatistics(filters),
+      getPerformanceSummary(filters)
     ]);
 
-    // Transform statistics
-    const transformedStats = allStats.slice(0, query.limit).map(stat => ({
+    // Transform statistics - return all relays (no limit applied, or use provided limit)
+    const transformedStats = allStats.map(stat => ({
       id: stat.id,
       relay_name: stat.relay_name,
       total_blocks: stat.total_blocks,
@@ -82,6 +88,26 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Error fetching statistics:', error);
+    return NextResponse.json<ApiResponse>({
+      success: false,
+      error: 'Internal server error'
+    }, { status: 500 });
+  }
+}
+
+// POST /api/statistics - Refresh cached statistics table
+// Note: Statistics are now computed directly from RelayDetail, 
+// but this endpoint can be used to refresh the cache table for consistency
+export async function POST(_request: NextRequest) {
+  try {
+    await updateAllStatistics();
+
+    return NextResponse.json<ApiResponse>({
+      success: true,
+      message: 'Statistics refreshed successfully'
+    });
+  } catch (error) {
+    console.error('Error refreshing statistics:', error);
     return NextResponse.json<ApiResponse>({
       success: false,
       error: 'Internal server error'

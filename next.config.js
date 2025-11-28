@@ -6,6 +6,8 @@ const nextConfig = {
       '/api/**/*': ['./node_modules/**/*.js'],
     },
   },
+  // Disable standalone mode when using custom server
+  // output: undefined,
 };
 
 module.exports = nextConfig;
