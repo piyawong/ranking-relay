@@ -18,8 +18,10 @@ const navLinks = [
 
 export default function AppLayout({
   children,
+  fullWidth = false,
 }: {
   children: React.ReactNode;
+  fullWidth?: boolean;
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -82,7 +84,7 @@ export default function AppLayout({
           </div>
         )}
       </header>
-      <main className="container mx-auto px-0 py-4 md:py-8">{children}</main>
+      <main className={fullWidth ? '' : 'container mx-auto px-0 py-4 md:py-8'}>{children}</main>
     </div>
   );
 }

@@ -5,7 +5,8 @@
  * Usage: npx tsx scripts/purge-all-anomalies.ts [--dry-run]
  */
 
-import { PrismaClient, Decimal } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 
 const prisma = new PrismaClient();
 

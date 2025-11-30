@@ -1,0 +1,23 @@
+# Development Dockerfile with hot reload support
+FROM node:20-alpine
+
+# Install OpenSSL and other required libraries
+RUN apk add --no-cache libc6-compat openssl
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json ./
+COPY prisma ./prisma/
+
+# Install dependencies
+RUN npm ci
+
+# Generate Prisma Client
+RUN npx prisma generate
+
+# Expose ports for Next.js and Socket server
+EXPOSE 3000 3001
+
+# Start development server with turbo and bind to 0.0.0.0
+CMD ["npx", "next", "dev", "--turbo", "-H", "0.0.0.0"]

@@ -7,13 +7,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -324,7 +324,7 @@ export default function RelayManagementPage() {
       {/* Header */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Relay Management</h1>
+          <h1 className="text-3xl font-bold">Relay Management 1235</h1>
           <p className="text-muted-foreground">
             Manage relay nodes and view their global distribution
           </p>
@@ -395,7 +395,7 @@ export default function RelayManagementPage() {
       </div>
 
       {/* Map */}
-      <Card>
+      <Card className="relative z-0">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Globe className="h-5 w-5" />
@@ -406,7 +406,7 @@ export default function RelayManagementPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="h-[400px] rounded-lg overflow-hidden">
+          <div className="h-[400px] rounded-lg overflow-hidden relative z-0">
             <RelayNodeMap
               nodes={filteredNodes}
               selectedNode={selectedNode}
@@ -577,19 +577,19 @@ export default function RelayManagementPage() {
         </CardContent>
       </Card>
 
-      {/* Create/Edit Dialog */}
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
+      {/* Create/Edit Side Panel */}
+      <Sheet open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <SheetContent side="right" allowClickThrough className="overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>
               {editingNode ? 'Edit Relay Node' : 'Add New Relay Node'}
-            </DialogTitle>
-            <DialogDescription>
+            </SheetTitle>
+            <SheetDescription>
               {editingNode
                 ? 'Update the relay node information'
                 : 'Fill in the details to add a new relay node. Click on the map to set coordinates.'}
-            </DialogDescription>
-          </DialogHeader>
+            </SheetDescription>
+          </SheetHeader>
           <form onSubmit={handleSubmit}>
             <div className="grid gap-4 py-4">
               {formError && (
@@ -694,14 +694,14 @@ export default function RelayManagementPage() {
               </div>
               <div className="grid gap-2">
                 <label htmlFor="endpoint" className="text-sm font-medium">
-                  Endpoint URL
+                  IP Address
                 </label>
                 <Input
                   id="endpoint"
-                  type="url"
+                  type="text"
                   value={formData.endpoint}
                   onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
-                  placeholder="https://..."
+                  placeholder="e.g., 192.168.1.1 or 3.226.235.156"
                 />
               </div>
               <div className="grid gap-2">
@@ -716,7 +716,7 @@ export default function RelayManagementPage() {
                 />
               </div>
             </div>
-            <DialogFooter>
+            <SheetFooter>
               <Button
                 type="button"
                 variant="outline"
@@ -734,10 +734,10 @@ export default function RelayManagementPage() {
                   ? 'Update'
                   : 'Create'}
               </Button>
-            </DialogFooter>
+            </SheetFooter>
           </form>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>

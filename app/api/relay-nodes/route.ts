@@ -4,14 +4,14 @@ import { z } from 'zod';
 
 const createRelayNodeSchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  tag: z.string().optional(),
-  description: z.string().optional(),
+  tag: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
-  location: z.string().optional(),
-  country: z.string().optional(),
+  location: z.string().nullable().optional(),
+  country: z.string().nullable().optional(),
   status: z.enum(['active', 'inactive', 'maintenance']).default('active'),
-  endpoint: z.string().url().optional().or(z.literal('')),
+  endpoint: z.string().nullable().optional(),
 });
 
 export async function GET(request: NextRequest) {

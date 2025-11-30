@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -20,20 +20,36 @@ interface RelayNode {
   updated_at?: string;
 }
 
+interface NodeConfig {
+  target_peers: number;
+  max_latency_ms: number;
+}
+
+// Convert latency (ms) to radius (meters) for map visualization
+// Using a logarithmic scale: higher latency = larger coverage area
+// 50ms → ~300km, 100ms → ~500km, 200ms → ~800km, 500ms → ~1500km
+function latencyToRadius(latencyMs: number): number {
+  const baseRadius = 150000; // 150km base
+  const scaleFactor = 3000; // meters per ms
+  return baseRadius + (latencyMs * scaleFactor);
+}
+
 interface RelayNodeMapProps {
   nodes: RelayNode[];
   selectedNode: RelayNode | null;
   onNodeSelect: (node: RelayNode) => void;
   onMapClick?: (lat: number, lng: number) => void;
+  configRefreshKey?: number; // Increment this to trigger config refresh
 }
 
+const statusColors: Record<string, string> = {
+  active: '#22c55e',
+  inactive: '#ef4444',
+  maintenance: '#f59e0b',
+};
+
 const getMarkerIcon = (status: string) => {
-  const colors: Record<string, string> = {
-    active: '#22c55e',
-    inactive: '#ef4444',
-    maintenance: '#f59e0b',
-  };
-  const color = colors[status] || '#6b7280';
+  const color = statusColors[status] || '#6b7280';
 
   return L.divIcon({
     className: 'custom-marker',
@@ -82,16 +98,36 @@ function MapClickHandler({ onMapClick }: { onMapClick?: (lat: number, lng: numbe
   return null;
 }
 
+// Fixed world center for zoom out
+const WORLD_CENTER: [number, number] = [20, 0];
+
 function FlyToNode({ node }: { node: RelayNode | null }) {
   const map = useMap();
+  const prevNodeId = useRef<string | null>(null);
 
   useEffect(() => {
+    const currentNodeId = node?.id ?? null;
+
+    // Only trigger fly animation when node actually changes
+    if (currentNodeId === prevNodeId.current) return;
+
+    prevNodeId.current = currentNodeId;
+
     if (node) {
+      // Zoom in to selected node
       map.flyTo([node.latitude, node.longitude], 6, { duration: 1 });
+    } else {
+      // Zoom out to world view when deselected (back to list) - faster animation
+      map.flyTo(WORLD_CENTER, 2, { duration: 0.5 });
     }
   }, [map, node]);
 
   return null;
+}
+
+// Helper to build proxy URL for fetching node config
+function buildProxyUrl(endpoint: string, path: string): string {
+  return `/api/relay-proxy?endpoint=${encodeURIComponent(endpoint)}&path=${encodeURIComponent(path)}`;
 }
 
 export default function RelayNodeMap({
@@ -99,11 +135,70 @@ export default function RelayNodeMap({
   selectedNode,
   onNodeSelect,
   onMapClick,
+  configRefreshKey = 0,
 }: RelayNodeMapProps) {
   const [mounted, setMounted] = useState(false);
+  const [nodeConfigs, setNodeConfigs] = useState<Record<string, NodeConfig>>({});
+  const [pulsePhase, setPulsePhase] = useState(0);
 
   useEffect(() => {
     setMounted(true);
+  }, []);
+
+  // Fetch config for each node with an endpoint
+  const fetchNodeConfigs = useCallback(async () => {
+    const configs: Record<string, NodeConfig> = {};
+
+    await Promise.all(
+      nodes
+        .filter(node => node.endpoint)
+        .map(async (node) => {
+          try {
+            const res = await fetch(buildProxyUrl(node.endpoint!, '/config'));
+            if (res.ok) {
+              const config = await res.json();
+              configs[node.id] = config;
+            }
+          } catch (error) {
+            // Silently fail for unreachable nodes
+          }
+        })
+    );
+
+    setNodeConfigs(configs);
+  }, [nodes]);
+
+  // Fetch configs on mount and when nodes change
+  useEffect(() => {
+    if (mounted && nodes.length > 0) {
+      fetchNodeConfigs();
+    }
+  }, [mounted, nodes, fetchNodeConfigs]);
+
+  // Re-fetch configs when configRefreshKey changes (triggered by config updates)
+  useEffect(() => {
+    if (mounted && configRefreshKey > 0) {
+      fetchNodeConfigs();
+    }
+  }, [mounted, configRefreshKey, fetchNodeConfigs]);
+
+  // Periodic refresh of configs every 30 seconds
+  useEffect(() => {
+    if (!mounted) return;
+
+    const interval = setInterval(() => {
+      fetchNodeConfigs();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [mounted, fetchNodeConfigs]);
+
+  // Pulse animation for radar effect (slower frequency)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPulsePhase((prev) => (prev + 1) % 100);
+    }, 150); // Slower animation: 150ms instead of 50ms
+    return () => clearInterval(interval);
   }, []);
 
   if (!mounted) {
@@ -123,7 +218,7 @@ export default function RelayNodeMap({
       center={defaultCenter}
       zoom={2}
       className="h-full w-full rounded-lg"
-      style={{ minHeight: '400px' }}
+      style={{ minHeight: '400px', zIndex: 0 }}
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -131,49 +226,124 @@ export default function RelayNodeMap({
       />
       <MapClickHandler onMapClick={onMapClick} />
       <FlyToNode node={selectedNode} />
-      {nodes.map((node) => (
-        <Marker
-          key={node.id}
-          position={[node.latitude, node.longitude]}
-          icon={getMarkerIcon(node.status)}
-          eventHandlers={{
-            click: () => onNodeSelect(node),
-          }}
-        >
-          <Popup>
-            <div className="min-w-[200px]">
-              <h3 className="font-bold text-lg">{node.name}</h3>
-              {node.tag && (
-                <span className="inline-block px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded mt-1">
-                  {node.tag}
-                </span>
-              )}
-              {node.location && (
-                <p className="text-sm text-gray-600 mt-2">
-                  {node.location}{node.country ? `, ${node.country}` : ''}
+
+      {/* Coverage circles (radar effect) - rendered first so they appear behind markers */}
+      {/* Each node's radius is based on its own max_latency_ms config */}
+      {nodes.map((node) => {
+        const config = nodeConfigs[node.id];
+        if (!config) return null;
+
+        const baseColor = statusColors[node.status] || '#6b7280';
+        const maxRadius = latencyToRadius(config.max_latency_ms);
+        const isSelected = selectedNode?.id === node.id;
+
+        // Create multiple concentric circles for radar effect
+        const circles = [];
+        const numRings = 3;
+
+        for (let i = 0; i < numRings; i++) {
+          // Animate each ring outward
+          const phase = ((pulsePhase + i * 33) % 100) / 100;
+          const radius = maxRadius * (0.3 + phase * 0.7);
+          const opacity = isSelected
+            ? 0.3 * (1 - phase * 0.7)
+            : 0.15 * (1 - phase * 0.7);
+
+          circles.push(
+            <Circle
+              key={`${node.id}-ring-${i}`}
+              center={[node.latitude, node.longitude]}
+              radius={radius}
+              pathOptions={{
+                color: baseColor,
+                fillColor: baseColor,
+                fillOpacity: opacity,
+                weight: isSelected ? 2 : 1,
+                opacity: opacity * 2,
+              }}
+            />
+          );
+        }
+
+        // Static outer boundary circle
+        circles.push(
+          <Circle
+            key={`${node.id}-boundary`}
+            center={[node.latitude, node.longitude]}
+            radius={maxRadius}
+            pathOptions={{
+              color: baseColor,
+              fillColor: baseColor,
+              fillOpacity: isSelected ? 0.1 : 0.05,
+              weight: isSelected ? 2 : 1,
+              opacity: isSelected ? 0.6 : 0.3,
+              dashArray: '5, 5',
+            }}
+          />
+        );
+
+        return circles;
+      })}
+
+      {/* Node markers - rendered last so they appear on top */}
+      {nodes.map((node) => {
+        const config = nodeConfigs[node.id];
+
+        return (
+          <Marker
+            key={node.id}
+            position={[node.latitude, node.longitude]}
+            icon={getMarkerIcon(node.status)}
+            eventHandlers={{
+              click: () => onNodeSelect(node),
+            }}
+          >
+            <Popup>
+              <div className="min-w-[200px]">
+                <h3 className="font-bold text-lg">{node.name}</h3>
+                {node.tag && (
+                  <span className="inline-block px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded mt-1">
+                    {node.tag}
+                  </span>
+                )}
+                {node.location && (
+                  <p className="text-sm text-gray-600 mt-2">
+                    {node.location}{node.country ? `, ${node.country}` : ''}
+                  </p>
+                )}
+                <p className="text-sm mt-1">
+                  Status:{' '}
+                  <span
+                    className={`font-medium ${
+                      node.status === 'active'
+                        ? 'text-green-600'
+                        : node.status === 'inactive'
+                        ? 'text-red-600'
+                        : 'text-yellow-600'
+                    }`}
+                  >
+                    {node.status}
+                  </span>
                 </p>
-              )}
-              <p className="text-sm mt-1">
-                Status:{' '}
-                <span
-                  className={`font-medium ${
-                    node.status === 'active'
-                      ? 'text-green-600'
-                      : node.status === 'inactive'
-                      ? 'text-red-600'
-                      : 'text-yellow-600'
-                  }`}
-                >
-                  {node.status}
-                </span>
-              </p>
-              {node.description && (
-                <p className="text-sm text-gray-500 mt-2">{node.description}</p>
-              )}
-            </div>
-          </Popup>
-        </Marker>
-      ))}
+                {config && (
+                  <div className="mt-2 pt-2 border-t border-gray-200">
+                    <p className="text-xs text-gray-500">Coverage Config:</p>
+                    <p className="text-sm">
+                      Max Latency: <span className="font-medium">{config.max_latency_ms}ms</span>
+                    </p>
+                    <p className="text-sm">
+                      Target Peers: <span className="font-medium">{config.target_peers}</span>
+                    </p>
+                  </div>
+                )}
+                {node.description && (
+                  <p className="text-sm text-gray-500 mt-2">{node.description}</p>
+                )}
+              </div>
+            </Popup>
+          </Marker>
+        );
+      })}
     </MapContainer>
   );
 }
