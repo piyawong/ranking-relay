@@ -56,7 +56,14 @@ export interface BlockData {
  */
 // Simple in-memory cache for slot data
 const slotCache = new Map<number, { data: SlotInfo | null; timestamp: number }>();
-const CACHE_TTL = 60 * 1000; // 1 minute cache
+// Cache for execution block -> slot mapping (permanent since this never changes)
+const executionBlockToSlotCache = new Map<number, { slot: number | null; timestamp: number }>();
+const CACHE_TTL = 60 * 1000; // 1 minute cache for slot data
+const EXEC_BLOCK_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours for exec block -> slot (permanent mapping)
+
+// Ethereum merge constants - used for approximate slot estimation
+const MERGE_BLOCK = 15537394;
+const MERGE_SLOT = 4700013;
 
 /**
  * Get block information from slot using local beacon node
@@ -137,6 +144,78 @@ export async function getBlockHashFromSlot(slot: number): Promise<SlotInfo | nul
     slotCache.set(slot, { data: null, timestamp: Date.now() });
     return null;
   }
+}
+
+/**
+ * Get the beacon slot number for a given execution block number.
+ * Uses beaconcha.in API for accurate lookup.
+ *
+ * Args:
+ *   executionBlock: Ethereum execution layer block number
+ *
+ * Returns:
+ *   Slot number or null if not found
+ */
+export async function getSlotForExecutionBlock(executionBlock: number): Promise<number | null> {
+  // Check cache first (long TTL since this mapping never changes)
+  const cached = executionBlockToSlotCache.get(executionBlock);
+  if (cached && Date.now() - cached.timestamp < EXEC_BLOCK_CACHE_TTL) {
+    return cached.slot;
+  }
+
+  // Can't convert pre-merge blocks
+  if (executionBlock < MERGE_BLOCK) {
+    executionBlockToSlotCache.set(executionBlock, { slot: null, timestamp: Date.now() });
+    return null;
+  }
+
+  try {
+    // Use beaconcha.in API to get slot from execution block
+    const apiKey = process.env.BEACONCHAIN_API_KEY || 'RmZjQjd2dk1MOWxCanJPaE1zdU1KU0pHd1hFUQ';
+    const url = `https://beaconcha.in/api/v1/execution/block/${executionBlock}?apikey=${apiKey}`;
+    console.log(`Fetching slot for execution block ${executionBlock} from beaconcha.in...`);
+
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      console.error(`beaconcha.in API error for block ${executionBlock}: ${response.status}`);
+      executionBlockToSlotCache.set(executionBlock, { slot: null, timestamp: Date.now() });
+      return null;
+    }
+
+    const data = await response.json();
+
+    // beaconcha.in returns { status: "OK", data: [{ posConsensus: { slot: ... } }] }
+    if (data.status === 'OK' && data.data && data.data.length > 0) {
+      const slot = data.data[0].posConsensus?.slot;
+      if (slot !== undefined && slot !== null) {
+        console.log(`Found slot ${slot} for execution block ${executionBlock} via beaconcha.in`);
+        executionBlockToSlotCache.set(executionBlock, { slot, timestamp: Date.now() });
+        return slot;
+      }
+    }
+
+    console.log(`No slot found for execution block ${executionBlock} in beaconcha.in response`);
+    executionBlockToSlotCache.set(executionBlock, { slot: null, timestamp: Date.now() });
+    return null;
+  } catch (error) {
+    console.error(`Error fetching slot for execution block ${executionBlock}:`, error);
+    executionBlockToSlotCache.set(executionBlock, { slot: null, timestamp: Date.now() });
+    return null;
+  }
+}
+
+/**
+ * Get approximate slot for execution block (fast, but may be off due to missed slots)
+ * Use getSlotForExecutionBlock for accurate results.
+ */
+export function estimateSlotForExecutionBlock(executionBlock: number): number {
+  if (executionBlock < MERGE_BLOCK) return 0;
+  return MERGE_SLOT + (executionBlock - MERGE_BLOCK);
 }
 
 // Cache for BloxRoute data

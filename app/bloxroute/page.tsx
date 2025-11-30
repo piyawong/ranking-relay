@@ -697,6 +697,32 @@ export default function BloxroutePage() {
     setOffset(0);
   }, [filters, limit]);
 
+  // Auto-fetch pandaops data for all visible blocks
+  useEffect(() => {
+    if (comparisons && comparisons.length > 0) {
+      // Fetch pandaops data for blocks we don't have yet (limit to first 50 to avoid too many requests)
+      const blocksToFetch = comparisons
+        .slice(0, 50)
+        .filter((c: any) => !propagationData[c.block_number])
+        .map((c: any) => c.block_number);
+
+      // Fetch in batches to avoid overwhelming the API
+      const fetchBatch = async () => {
+        for (const blockNumber of blocksToFetch) {
+          if (!propagationData[blockNumber]) {
+            await fetchPropagationData(blockNumber);
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        }
+      };
+
+      if (blocksToFetch.length > 0) {
+        fetchBatch();
+      }
+    }
+  }, [comparisons]);
+
   return (
     <div className="container mx-auto px-0 md:px-4 py-8 space-y-6">
       {/* Header Section */}
@@ -1274,14 +1300,13 @@ export default function BloxroutePage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-10"></TableHead>
-                    <TableHead className="w-32">Block #</TableHead>
-                    <TableHead>First Relay</TableHead>
-                    <TableHead className="text-right md:block hidden">Relay Time</TableHead>
-                    <TableHead>Bloxroute Origin</TableHead>
-                    <TableHead className="text-right md:block hidden">Bloxroute Time</TableHead>
+                    <TableHead className="w-28">Block #</TableHead>
+                    <TableHead>Our Relay</TableHead>
+                    <TableHead>Bloxroute</TableHead>
+                    <TableHead className="hidden lg:table-cell">Pandaops First</TableHead>
                     <TableHead className="text-right">Time Diff</TableHead>
                     <TableHead className="text-center">Result</TableHead>
-                    <TableHead className="text-center w-24 md:block hidden">Actions</TableHead>
+                    <TableHead className="text-center w-20 hidden md:table-cell">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1322,21 +1347,53 @@ export default function BloxroutePage() {
                             </span>
                           </Link>
                         </TableCell>
-                        <TableCell className="font-medium">
-                          {comparison.first_relay_name}
+                        {/* Our Relay - consolidated name + time */}
+                        <TableCell>
+                          <div className="space-y-0.5">
+                            <div className="font-medium text-green-700">{comparison.first_relay_name}</div>
+                            <div className="text-xs font-mono text-slate-500">
+                              {formatUTCTimestamp(comparison.first_relay_timestamp)}
+                            </div>
+                          </div>
                         </TableCell>
-                        <TableCell className="text-right md:block hidden">
-                          <span className="text-sm font-mono text-slate-700">
-                            {formatUTCTimestamp(comparison.first_relay_timestamp)}
-                          </span>
+                        {/* Bloxroute - consolidated origin + time */}
+                        <TableCell>
+                          <div className="space-y-0.5">
+                            <div className="font-medium text-orange-700">{comparison.bloxroute_origin}</div>
+                            <div className="text-xs font-mono text-slate-500">
+                              {formatUTCTimestamp(comparison.bloxroute_timestamp)}
+                            </div>
+                          </div>
                         </TableCell>
-                        <TableCell className="font-medium text-slate-600">
-                          {comparison.bloxroute_origin}
-                        </TableCell>
-                        <TableCell className="text-right md:block hidden">
-                          <span className="text-sm font-mono text-slate-700">
-                            {formatUTCTimestamp(comparison.bloxroute_timestamp)}
-                          </span>
+                        {/* Pandaops First - time + place */}
+                        <TableCell className="hidden lg:table-cell">
+                          {propagationData[comparison.block_number] ? (
+                            <div className="space-y-0.5">
+                              <div className="text-xs font-mono text-purple-700">
+                                {(() => {
+                                  const pd = propagationData[comparison.block_number];
+                                  if (!pd.statistics?.minTime && pd.statistics?.minTime !== 0) return '-';
+                                  const slotStartMs = pd.slotStartDateTime * 1000;
+                                  const seenMs = slotStartMs + pd.statistics.minTime;
+                                  const d = new Date(seenMs);
+                                  return `${d.getUTCHours()}:${d.getUTCMinutes().toString().padStart(2, '0')}:${d.getUTCSeconds().toString().padStart(2, '0')}.${d.getUTCMilliseconds().toString().padStart(3, '0')}`;
+                                })()}
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                {(() => {
+                                  const pd = propagationData[comparison.block_number];
+                                  const firstNode = pd.nodes?.[0];
+                                  if (!firstNode) return '-';
+                                  if (firstNode.city && firstNode.countryCode) {
+                                    return `${firstNode.city}, ${firstNode.countryCode}`;
+                                  }
+                                  return firstNode.country || '-';
+                                })()}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-xs text-slate-400">Loading...</div>
+                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className={cn(
@@ -1349,16 +1406,16 @@ export default function BloxroutePage() {
                         </TableCell>
                         <TableCell className="text-center">
                           {comparison.relay_won ? (
-                            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                              🏆 Relay Won
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              🏆 Won
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                              ⚡ Bloxroute Won
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                              ⚡ Lost
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className="text-center md:block hidden">
+                        <TableCell className="text-center hidden md:table-cell">
                           <Button
                             variant="ghost"
                             size="sm"
@@ -1381,7 +1438,7 @@ export default function BloxroutePage() {
                       {/* Expanded Row - Propagation Details */}
                       {expandedRows.has(comparison.block_number) && (
                         <TableRow className="bg-slate-50">
-                          <TableCell colSpan={9} className="p-0">
+                          <TableCell colSpan={8} className="p-0">
                             <div className="p-4 space-y-4">
                               {!propagationData[comparison.block_number] ? (
                                 <div className="flex items-center justify-center py-8">

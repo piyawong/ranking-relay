@@ -14,7 +14,10 @@ const http = require('http');
 const CONFIG = {
   telegram: {
     botToken: '8531358829:AAGw6SbUuiIc24a9FhaCwMtzIe5A3YJW88E',
-    chatId: '7371826522',
+    chatIds: [
+      '7371826522',   // piyawatpm (P M)
+      '2139940142',   // oon
+    ],
   },
   reconnectInterval: 100, // 100ms - immediate reconnect
   controlPort: 3099, // HTTP control port
@@ -168,27 +171,30 @@ function extractLogTimestamp(message) {
   return null;
 }
 
-// Send Telegram notification
+// Send Telegram notification to all chat IDs
 async function sendTelegram(message) {
-  try {
-    const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: CONFIG.telegram.chatId,
-        text: message,
-        parse_mode: 'HTML',
-      }),
-    });
-    const data = await response.json();
-    if (data.ok) {
-      console.log(`[Telegram] Notification sent: ${message.substring(0, 50)}...`);
-    } else {
-      console.error('[Telegram] Failed:', data.description);
+  const url = `https://api.telegram.org/bot${CONFIG.telegram.botToken}/sendMessage`;
+
+  for (const chatId of CONFIG.telegram.chatIds) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: message,
+          parse_mode: 'HTML',
+        }),
+      });
+      const data = await response.json();
+      if (data.ok) {
+        console.log(`[Telegram] Sent to ${chatId}: ${message.substring(0, 50)}...`);
+      } else {
+        console.error(`[Telegram] Failed for ${chatId}:`, data.description);
+      }
+    } catch (error) {
+      console.error(`[Telegram] Error for ${chatId}:`, error.message);
     }
-  } catch (error) {
-    console.error('[Telegram] Error:', error.message);
   }
 }
 
@@ -505,7 +511,7 @@ function startStatusMonitoring() {
 console.log('='.repeat(50));
 console.log('Log Monitor Service');
 console.log('='.repeat(50));
-console.log(`Telegram Chat ID: ${CONFIG.telegram.chatId}`);
+console.log(`Telegram Chat IDs: ${CONFIG.telegram.chatIds.join(', ')}`);
 console.log(`Monitoring services:`);
 for (const service of CONFIG.services) {
   console.log(`  - ${service.name}: ${service.patterns.map(p => p.name).join(', ')}`);

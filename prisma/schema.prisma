@@ -79,7 +79,7 @@ model Trade {
   timestamp                DateTime
   trigger_category         String    // "onchain" or "onsite"
   trigger_type             String    // "fast_hook" or "rollbit_price_update"
-  block_number             Int
+  block_number             Int?
   initial_reserves_rlb     Decimal   @db.Decimal(20, 8)
   trade_amount_rlb         Decimal   @db.Decimal(20, 8)
 

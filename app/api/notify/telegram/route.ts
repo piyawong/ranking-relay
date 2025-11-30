@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const TELEGRAM_BOT_TOKEN = '8531358829:AAGw6SbUuiIc24a9FhaCwMtzIe5A3YJW88E';
-const TELEGRAM_CHAT_ID = '7371826522';
+const TELEGRAM_CHAT_IDS = [
+  '7371826522',   // piyawatpm (P M)
+  '2139940142',   // oon
+];
 const MONITOR_API = 'http://148.251.66.154:3099';
 
 // Check if a specific notification pattern is enabled
@@ -54,27 +57,37 @@ export async function POST(request: NextRequest) {
       ? `🔔 ${message}\n\n⏰ ${new Date(timestamp).toLocaleString()}`
       : `🔔 ${message}`;
 
-    const response = await fetch(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: TELEGRAM_CHAT_ID,
-          text: text,
-          parse_mode: 'HTML',
-        }),
-      }
+    // Send to all chat IDs
+    const results = await Promise.all(
+      TELEGRAM_CHAT_IDS.map(async (chatId) => {
+        try {
+          const response = await fetch(
+            `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chatId,
+                text: text,
+                parse_mode: 'HTML',
+              }),
+            }
+          );
+          const data = await response.json();
+          return { chatId, success: data.ok, message_id: data.result?.message_id };
+        } catch (err) {
+          console.error(`Failed to send to ${chatId}:`, err);
+          return { chatId, success: false, error: err };
+        }
+      })
     );
 
-    const data = await response.json();
-
-    if (!data.ok) {
-      console.error('Telegram API error:', data);
-      return NextResponse.json({ error: data.description || 'Failed to send' }, { status: 500 });
+    const allSuccess = results.every((r) => r.success);
+    if (!allSuccess) {
+      console.error('Some Telegram messages failed:', results.filter((r) => !r.success));
     }
 
-    return NextResponse.json({ success: true, message_id: data.result.message_id });
+    return NextResponse.json({ success: true, results });
   } catch (error) {
     console.error('Error sending Telegram notification:', error);
     return NextResponse.json(

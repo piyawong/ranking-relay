@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db/prisma';
+import { getSlotForExecutionBlock } from '@/lib/utils/fetch-block-data';
 
 // GET - Fetch trades with optional filters and statistics
 export async function GET(request: NextRequest) {
@@ -28,14 +29,35 @@ export async function GET(request: NextRequest) {
     });
 
     // Fetch block data for bloxroute comparison
-    // Get unique block numbers from trades
-    const blockNumbers = Array.from(new Set(trades.map(t => t.block_number)));
+    // Get unique block numbers from trades and look up actual slots from beacon node
+    const blockNumbers = Array.from(new Set(trades.filter(t => t.block_number !== null).map(t => t.block_number!)));
 
-    // Fetch blocks with their relay details
+    // Look up actual slots for each execution block (queries beacon node)
+    const executionToSlotMap = new Map<number, number>();
+    const slotNumbers: number[] = [];
+
+    for (const execBlock of blockNumbers) {
+      const slot = await getSlotForExecutionBlock(execBlock);
+      if (slot !== null) {
+        executionToSlotMap.set(execBlock, slot);
+        slotNumbers.push(slot);
+      }
+    }
+
+    // Search nearby slots (±2) to account for any edge cases
+    const slotSearchRange: number[] = [];
+    slotNumbers.forEach(slot => {
+      for (let i = -2; i <= 2; i++) {
+        slotSearchRange.push(slot + i);
+      }
+    });
+    const uniqueSlots = Array.from(new Set(slotSearchRange));
+
+    // Fetch blocks with their relay details - search by slot numbers
     const blocks = await prisma.block.findMany({
       where: {
         OR: [
-          { block_number: { in: blockNumbers } },
+          { block_number: { in: uniqueSlots } },
           { execution_block_number: { in: blockNumbers } }
         ]
       },
@@ -175,8 +197,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       statistics,
       trades: trades.map(trade => {
-        // Try to find block by execution_block_number first, then by slot
-        const block = blockByExecution.get(trade.block_number) || blockBySlot.get(trade.block_number);
+        // Get the actual slot from beacon node lookup (cached in executionToSlotMap)
+        const actualSlot = trade.block_number ? executionToSlotMap.get(trade.block_number) || null : null;
+
+        // Try to find block by execution_block_number first, then by actual slot
+        let block = trade.block_number ? blockByExecution.get(trade.block_number) : undefined;
+        let matchedSlot = block?.block_number || null;
+
+        if (!block && actualSlot) {
+          // Search nearby slots (±2) for a match in our database
+          for (let i = 0; i <= 2; i++) {
+            block = blockBySlot.get(actualSlot + i) || blockBySlot.get(actualSlot - i);
+            if (block) {
+              matchedSlot = block.block_number;
+              break;
+            }
+          }
+        }
+
         const firstRelay = block?.relay_details?.[0];
 
         // Calculate bloxroute comparison
@@ -208,6 +246,8 @@ export async function GET(request: NextRequest) {
           api_call_duration_ms: trade.api_call_duration_ms ? parseFloat(trade.api_call_duration_ms.toString()) : null,
           priority_gwei: trade.priority_gwei ? parseFloat(trade.priority_gwei.toString()) : null,
           opponent_time_gap_ms: trade.opponent_time_gap_ms ? parseFloat(trade.opponent_time_gap_ms.toString()) : null,
+          // Slot number (from beacon node lookup)
+          slot_number: matchedSlot || actualSlot,
           // Block data for bloxroute comparison
           first_relay: firstRelay?.relay_name || null,
           bloxroute_origin: block?.origin || null,

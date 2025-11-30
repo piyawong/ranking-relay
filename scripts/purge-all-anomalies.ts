@@ -5,12 +5,11 @@
  * Usage: npx tsx scripts/purge-all-anomalies.ts [--dry-run]
  */
 
-import { PrismaClient } from '@prisma/client';
-import { Decimal } from '@prisma/client/runtime/library';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-function decimalToNumber(val: Decimal | number | null): number {
+function decimalToNumber(val: Prisma.Decimal | number | null): number {
   if (val === null) return 0;
   if (typeof val === 'number') return val;
   return parseFloat(val.toString());

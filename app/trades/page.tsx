@@ -8,8 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertCircle, Clock, Trash2, CheckCircle2, XCircle, MinusCircle, RefreshCw, ExternalLink, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { AlertCircle, Clock, Trash2, CheckCircle2, XCircle, MinusCircle, RefreshCw, ExternalLink, ArrowUpRight, ArrowDownRight, Plus } from 'lucide-react';
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface Trade {
   id: string;
@@ -19,6 +22,7 @@ interface Trade {
   trigger_category: 'onchain' | 'onsite';
   trigger_type: 'fast_hook' | 'rollbit_price_update';
   block_number: number;
+  slot_number: number | null;
   initial_reserves_rlb: number;
   trade_amount_rlb: number;
   direction: string | null;
@@ -110,14 +114,27 @@ export default function TradePage() {
   const [deletingTrade, setDeletingTrade] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
 
+  // Add Trade Modal
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [newTrade, setNewTrade] = useState({
+    trigger_category: 'onchain',
+    trigger_type: 'fast_hook',
+    block_number: '',
+    trade_amount_rlb: '',
+    direction: 'buy_onsite_sell_onchain',
+    step1_action: 'buy',
+    onsite_value_with_fee: '',
+    tx_hash: '',
+    onchain_usd_value: '',
+    gas_used_usd: '',
+    opponent: false,
+    win: true,
+  });
+
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const tradesPerPage = 20;
-
-  // Last check tracking
-  const [lastCheckTime, setLastCheckTime] = useState<Date | null>(null);
-  const [secondsAgo, setSecondsAgo] = useState<number>(0);
-  const [lastProcessed, setLastProcessed] = useState<number>(0);
 
   const fetchTrades = useCallback(async () => {
     try {
@@ -145,51 +162,6 @@ export default function TradePage() {
   useEffect(() => {
     fetchTrades();
   }, [fetchTrades]);
-
-  // Background interval to process pending trades (every 4 seconds)
-  useEffect(() => {
-    const processPendingTrades = async () => {
-      try {
-        const response = await fetch('/api/trades/process-pending');
-        setLastCheckTime(new Date());
-        if (response.ok) {
-          const data = await response.json();
-          setLastProcessed(data.processed || 0);
-          // If any trades were processed, refresh the list
-          if (data.processed > 0) {
-            console.log(`[Auto-process] Processed ${data.processed} trades`);
-            fetchTrades();
-          }
-        }
-      } catch (err) {
-        // Silently fail - this is a background task
-        console.error('Background processing error:', err);
-      }
-    };
-
-    // Run immediately on mount
-    processPendingTrades();
-
-    // Set up interval
-    const interval = setInterval(processPendingTrades, 4000);
-
-    return () => clearInterval(interval);
-  }, [fetchTrades]);
-
-  // Update "seconds ago" display every second
-  useEffect(() => {
-    const updateSecondsAgo = () => {
-      if (lastCheckTime) {
-        const diff = Math.floor((Date.now() - lastCheckTime.getTime()) / 1000);
-        setSecondsAgo(diff);
-      }
-    };
-
-    updateSecondsAgo();
-    const interval = setInterval(updateSecondsAgo, 1000);
-
-    return () => clearInterval(interval);
-  }, [lastCheckTime]);
 
   const formatDuration = (ms: number | null) => {
     if (ms === null) return 'N/A';
@@ -276,6 +248,96 @@ export default function TradePage() {
     }
   };
 
+  const handleAddTrade = async () => {
+    if (!newTrade.block_number || !newTrade.trade_amount_rlb) {
+      alert('Block number and trade amount are required');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+
+      // Calculate profit if we have both onsite and onchain values
+      let rawProfit = null;
+      let profitWithGas = null;
+      const onsiteVal = newTrade.onsite_value_with_fee ? parseFloat(newTrade.onsite_value_with_fee) : null;
+      const onchainVal = newTrade.onchain_usd_value ? parseFloat(newTrade.onchain_usd_value) : null;
+      const gasVal = newTrade.gas_used_usd ? parseFloat(newTrade.gas_used_usd) : 0;
+
+      if (onsiteVal !== null && onchainVal !== null) {
+        if (newTrade.direction === 'buy_onsite_sell_onchain') {
+          // Buy onsite (spend USD), sell onchain (receive USD)
+          rawProfit = onchainVal - onsiteVal;
+        } else {
+          // Sell onsite (receive USD), buy onchain (spend USD)
+          rawProfit = onsiteVal - onchainVal;
+        }
+        profitWithGas = rawProfit - gasVal;
+      }
+
+      const tradeData = {
+        trade_id: `manual-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        trigger_category: newTrade.trigger_category,
+        trigger_type: newTrade.trigger_type,
+        block_number: parseInt(newTrade.block_number),
+        initial_reserves_rlb: 0,
+        trade_amount_rlb: parseFloat(newTrade.trade_amount_rlb),
+        direction: newTrade.direction,
+        step1_action: newTrade.step1_action,
+        onsite_value_with_fee: onsiteVal,
+        tx_hash: newTrade.tx_hash || null,
+        onchain_usd_value: onchainVal,
+        gas_used_usd: gasVal || null,
+        raw_profit_usd: rawProfit,
+        profit_with_gas_usd: profitWithGas,
+        opponent: newTrade.opponent,
+        win: newTrade.win,
+        api_call_duration_ms: null,
+        priority_gwei: null,
+        opponent_trades_count: null,
+        opponent_time_gap_ms: null,
+        trade_logs: [],
+      };
+
+      const response = await fetch('/api/trades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tradeData),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create trade');
+      }
+
+      // Reset form and close modal
+      setNewTrade({
+        trigger_category: 'onchain',
+        trigger_type: 'fast_hook',
+        block_number: '',
+        trade_amount_rlb: '',
+        direction: 'buy_onsite_sell_onchain',
+        step1_action: 'buy',
+        onsite_value_with_fee: '',
+        tx_hash: '',
+        onchain_usd_value: '',
+        gas_used_usd: '',
+        opponent: false,
+        win: true,
+      });
+      setIsAddModalOpen(false);
+
+      // Refresh trades list
+      await fetchTrades();
+    } catch (err) {
+      console.error('Add trade error:', err);
+      alert(err instanceof Error ? err.message : 'Failed to add trade');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Paginated trades
   const indexOfLastTrade = currentPage * tradesPerPage;
   const indexOfFirstTrade = indexOfLastTrade - tradesPerPage;
@@ -290,17 +352,185 @@ export default function TradePage() {
           <p className="text-sm text-muted-foreground mt-1">Monitor trade execution and outcomes</p>
         </div>
         <div className="flex items-center gap-4">
-          {/* Last check indicator */}
-          <div className="text-right text-xs">
-            <div className="flex items-center gap-1 text-muted-foreground">
-              <div className={`w-2 h-2 rounded-full ${secondsAgo < 5 ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
-              <span>Last check: {secondsAgo}s ago</span>
-            </div>
-            {lastProcessed > 0 && (
-              <div className="text-green-600">+{lastProcessed} processed</div>
-            )}
-          </div>
           <div className="flex gap-2">
+            <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
+              <DialogTrigger asChild>
+                <Button variant="default" size="sm">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Trade
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-[500px]">
+                <DialogHeader>
+                  <DialogTitle>Add Manual Trade</DialogTitle>
+                  <DialogDescription>
+                    Manually add a trade record. Fill in the details below.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  {/* Row 1: Category & Type */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="trigger_category">Category</Label>
+                      <Select
+                        value={newTrade.trigger_category}
+                        onValueChange={(v) => setNewTrade({ ...newTrade, trigger_category: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="onchain">Onchain</SelectItem>
+                          <SelectItem value="onsite">Onsite</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="trigger_type">Trigger Type</Label>
+                      <Select
+                        value={newTrade.trigger_type}
+                        onValueChange={(v) => setNewTrade({ ...newTrade, trigger_type: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fast_hook">Fast Hook</SelectItem>
+                          <SelectItem value="rollbit_price_update">Rollbit Price Update</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Direction */}
+                  <div className="space-y-2">
+                    <Label>Direction</Label>
+                    <Select
+                      value={newTrade.direction}
+                      onValueChange={(v) => setNewTrade({
+                        ...newTrade,
+                        direction: v,
+                        step1_action: v === 'buy_onsite_sell_onchain' ? 'buy' : 'sell'
+                      })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="buy_onsite_sell_onchain">Buy Onsite → Sell Onchain</SelectItem>
+                        <SelectItem value="sell_onsite_buy_onchain">Sell Onsite → Buy Onchain</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Row 3: Block & Amount */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="block_number">Block Number *</Label>
+                      <Input
+                        id="block_number"
+                        type="number"
+                        placeholder="e.g., 21285000"
+                        value={newTrade.block_number}
+                        onChange={(e) => setNewTrade({ ...newTrade, block_number: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="trade_amount_rlb">Amount (RLB) *</Label>
+                      <Input
+                        id="trade_amount_rlb"
+                        type="number"
+                        placeholder="e.g., 40001"
+                        value={newTrade.trade_amount_rlb}
+                        onChange={(e) => setNewTrade({ ...newTrade, trade_amount_rlb: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 4: USD Values */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="onsite_value_with_fee">Onsite Value (USD)</Label>
+                      <Input
+                        id="onsite_value_with_fee"
+                        type="number"
+                        step="0.01"
+                        placeholder="e.g., 2200.50"
+                        value={newTrade.onsite_value_with_fee}
+                        onChange={(e) => setNewTrade({ ...newTrade, onsite_value_with_fee: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="onchain_usd_value">Onchain Value (USD)</Label>
+                      <Input
+                        id="onchain_usd_value"
+                        type="number"
+                        step="0.01"
+                        placeholder="e.g., 2205.30"
+                        value={newTrade.onchain_usd_value}
+                        onChange={(e) => setNewTrade({ ...newTrade, onchain_usd_value: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 5: Gas & TX Hash */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="gas_used_usd">Gas (USD)</Label>
+                      <Input
+                        id="gas_used_usd"
+                        type="number"
+                        step="0.0001"
+                        placeholder="e.g., 0.50"
+                        value={newTrade.gas_used_usd}
+                        onChange={(e) => setNewTrade({ ...newTrade, gas_used_usd: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="tx_hash">TX Hash</Label>
+                      <Input
+                        id="tx_hash"
+                        placeholder="0x..."
+                        value={newTrade.tx_hash}
+                        onChange={(e) => setNewTrade({ ...newTrade, tx_hash: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 6: Opponent & Win */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="opponent"
+                        checked={newTrade.opponent}
+                        onChange={(e) => setNewTrade({ ...newTrade, opponent: e.target.checked })}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <Label htmlFor="opponent">Has Opponent</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="win"
+                        checked={newTrade.win}
+                        onChange={(e) => setNewTrade({ ...newTrade, win: e.target.checked })}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <Label htmlFor="win">Win</Label>
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsAddModalOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleAddTrade} disabled={isSubmitting}>
+                    {isSubmitting ? 'Adding...' : 'Add Trade'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
             <Button onClick={fetchTrades} variant="outline" size="sm">
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh
@@ -508,14 +738,13 @@ export default function TradePage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[130px]">Time</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Trade</TableHead>
                   <TableHead className="text-right">Onsite</TableHead>
                   <TableHead className="text-center">Onchain</TableHead>
+                  <TableHead className="text-right">Gas $</TableHead>
                   <TableHead className="text-right">Profit</TableHead>
                   <TableHead className="text-center">Block</TableHead>
-                  <TableHead className="text-center">Relay</TableHead>
-                  <TableHead className="text-center">Bloxroute</TableHead>
+                  <TableHead className="text-center">Relay vs Bloxroute</TableHead>
                   <TableHead className="text-right">Response</TableHead>
                   <TableHead className="text-center">Result</TableHead>
                   <TableHead className="w-[80px]"></TableHead>
@@ -525,7 +754,11 @@ export default function TradePage() {
                 {currentTrades.map((trade) => (
                   <TableRow
                     key={trade.id}
-                    className="group cursor-pointer hover:bg-muted/50"
+                    className={`group cursor-pointer hover:bg-muted/50 ${
+                      trade.trigger_category === 'onchain'
+                        ? 'bg-blue-50/50 dark:bg-blue-950/20'
+                        : 'bg-amber-50/50 dark:bg-amber-950/20'
+                    }`}
                     onClick={() => router.push(`/trades/${trade.trade_id || trade.id}`)}
                   >
                     <TableCell className="font-mono text-xs">
@@ -536,28 +769,27 @@ export default function TradePage() {
                         minute: '2-digit'
                       })}
                     </TableCell>
+                    {/* Consolidated Trade column: trigger + direction + amount */}
                     <TableCell>
-                      {trade.direction ? (
-                        <div className="flex items-center gap-2">
-                          {getDirectionIcon(trade.direction)}
-                          <div className="text-xs">
-                            <div className="font-medium">
-                              {trade.step1_action === 'buy' ? 'Buy' : 'Sell'} Onsite
-                            </div>
-                            <div className="text-muted-foreground">
-                              {trade.step1_action === 'buy' ? 'Sell' : 'Buy'} Onchain
-                            </div>
+                      <div className="flex items-center gap-2">
+                        {getDirectionIcon(trade.direction)}
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                              trade.trigger_category === 'onchain'
+                                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                                : 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+                            }`}>
+                              {trade.trigger_category === 'onchain' ? '⛓️ CHAIN' : '🏠 SITE'}
+                            </span>
+                            <span className="font-bold">{formatNumber(trade.trade_amount_rlb)}</span>
+                            <span className="text-xs text-muted-foreground">RLB</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {trade.step1_action === 'buy' ? 'Buy' : 'Sell'} Onsite → {trade.step1_action === 'buy' ? 'Sell' : 'Buy'} Onchain
                           </div>
                         </div>
-                      ) : (
-                        <Badge variant="outline" className="text-xs">
-                          {trade.trigger_category}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right font-medium">
-                      <div>{formatNumber(trade.trade_amount_rlb)}</div>
-                      <span className="text-xs text-muted-foreground">RLB</span>
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       {trade.onsite_value_with_fee !== null ? (
@@ -589,6 +821,14 @@ export default function TradePage() {
                         <span className="text-muted-foreground">-</span>
                       )}
                     </TableCell>
+                    {/* Gas Fee $ */}
+                    <TableCell className="text-right">
+                      {trade.gas_used_usd !== null ? (
+                        <span className="text-xs font-mono text-orange-600">{formatUSD(trade.gas_used_usd)}</span>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">-</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
                       {trade.profit_with_gas_usd !== null ? (
                         <div className={`font-bold ${trade.profit_with_gas_usd >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -605,25 +845,31 @@ export default function TradePage() {
                     </TableCell>
                     <TableCell className="text-center">
                       <div className="font-mono text-xs">#{trade.block_number}</div>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {trade.first_relay ? (
-                        <span className="text-xs font-medium truncate max-w-[100px] block" title={trade.first_relay}>
-                          {trade.first_relay}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">-</span>
+                      {trade.slot_number && (
+                        <div className="font-mono text-xs text-muted-foreground">slot {trade.slot_number}</div>
                       )}
                     </TableCell>
+                    {/* Consolidated Relay vs Bloxroute */}
                     <TableCell className="text-center">
-                      {trade.bloxroute_comparison.is_win_relay !== null ? (
-                        <div className="flex flex-col items-center gap-0.5">
-                          <span className={`text-xs font-bold ${trade.bloxroute_comparison.is_win_relay ? 'text-green-600' : 'text-red-600'}`}>
-                            {trade.bloxroute_comparison.is_win_relay ? '🏆 Won' : '⚡ Lost'}
-                          </span>
-                          <span className={`text-xs font-mono ${trade.bloxroute_comparison.time_diff_ms! < 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {trade.bloxroute_comparison.time_diff_ms! < 0 ? '' : '+'}{trade.bloxroute_comparison.time_diff_ms}ms
-                          </span>
+                      {trade.first_relay || trade.bloxroute_origin ? (
+                        <div className="flex flex-col items-center gap-1">
+                          {/* Relay info */}
+                          <div className="text-xs">
+                            <span className="text-green-700 font-medium">{trade.first_relay || '-'}</span>
+                          </div>
+                          {/* Bloxroute comparison */}
+                          {trade.bloxroute_comparison.is_win_relay !== null ? (
+                            <div className="flex items-center gap-1">
+                              <span className={`text-xs font-bold ${trade.bloxroute_comparison.is_win_relay ? 'text-green-600' : 'text-red-600'}`}>
+                                {trade.bloxroute_comparison.is_win_relay ? '🏆' : '⚡'}
+                              </span>
+                              <span className={`text-xs font-mono ${trade.bloxroute_comparison.time_diff_ms! < 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {trade.bloxroute_comparison.time_diff_ms! < 0 ? '' : '+'}{trade.bloxroute_comparison.time_diff_ms}ms
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">vs {trade.bloxroute_origin || 'N/A'}</span>
+                          )}
                         </div>
                       ) : (
                         <span className="text-muted-foreground text-xs">N/A</span>

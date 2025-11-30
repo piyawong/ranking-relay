@@ -72,9 +72,10 @@ COPY --from=builder /app/lib/utils/*.js ./lib/utils/
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/node_modules ./node_modules
 
-# Fix permissions for service files
-RUN chown -R nextjs:nodejs /app/lib/services /app/lib/utils
-RUN chmod -R 755 /app/lib/services /app/lib/utils
+# Create cache directory and fix permissions
+RUN mkdir -p /app/.next/cache
+RUN chown -R nextjs:nodejs /app/.next /app/lib/services /app/lib/utils
+RUN chmod -R 755 /app/.next /app/lib/services /app/lib/utils
 
 USER nextjs
 

@@ -62,6 +62,11 @@ COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 COPY scripts/entrypoint.sh ./scripts/entrypoint.sh
 RUN chmod +x ./scripts/entrypoint.sh
 
+# Create cache directory and fix permissions
+RUN mkdir -p /app/.next/cache
+RUN chown -R nextjs:nodejs /app/.next /app/prisma /app/scripts
+RUN chmod -R 755 /app/.next /app/prisma /app/scripts
+
 USER nextjs
 
 EXPOSE 3000
