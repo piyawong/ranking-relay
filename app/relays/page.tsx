@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
+import { Users } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -60,6 +61,7 @@ interface RelayNode {
   country: string | null;
   status: string;
   endpoint: string | null;
+  port: number;
   created_at: string;
   updated_at: string;
 }
@@ -80,6 +82,7 @@ interface RelayFormData {
   country: string;
   status: 'active' | 'inactive' | 'maintenance';
   endpoint: string;
+  port: string;
 }
 
 const emptyFormData: RelayFormData = {
@@ -92,7 +95,109 @@ const emptyFormData: RelayFormData = {
   country: '',
   status: 'active',
   endpoint: '',
+  port: '5052',
 };
+
+// Component to show mesh peer count for a node
+function MeshPeerCount({ endpoint, port }: { endpoint: string | null; port: number }) {
+  const { data: meshCount } = useQuery({
+    queryKey: ['mesh-count', endpoint, port],
+    queryFn: async () => {
+      if (!endpoint) return null;
+      const res = await fetch(`/api/relay-proxy?endpoint=${encodeURIComponent(endpoint)}&path=/mesh&port=${port}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      // Sum all peers across all topics
+      const totalPeers = data.reduce((sum: number, topic: { peers: unknown[] }) => sum + (topic.peers?.length || 0), 0);
+      return totalPeers;
+    },
+    enabled: !!endpoint,
+    staleTime: 30000, // Cache for 30 seconds
+    refetchInterval: 60000, // Refresh every 60 seconds
+  });
+
+  if (!endpoint || meshCount === null || meshCount === undefined) {
+    return null;
+  }
+
+  return (
+    <span className="text-xs text-muted-foreground flex items-center gap-1" title="Mesh peers">
+      <Users className="h-3 w-3" />
+      {meshCount}
+    </span>
+  );
+}
+
+interface MeshPeer {
+  peer_id: string;
+  [key: string]: unknown;
+}
+
+interface MeshTopic {
+  topic: string;
+  peers: MeshPeer[];
+}
+
+// Component to show unique mesh peers across all filtered nodes
+function UniqueMeshSummary({ nodes }: { nodes: Array<{ endpoint: string | null; port: number }> }) {
+  const nodesWithEndpoints = nodes.filter(n => n.endpoint);
+
+  const { data: uniquePeerData, isLoading } = useQuery({
+    queryKey: ['unique-mesh-peers', nodesWithEndpoints.map(n => `${n.endpoint}:${n.port}`).join(',')],
+    queryFn: async () => {
+      const allPeerIds = new Set<string>();
+
+      await Promise.all(
+        nodesWithEndpoints.map(async (node) => {
+          try {
+            const res = await fetch(`/api/relay-proxy?endpoint=${encodeURIComponent(node.endpoint!)}&path=/mesh&port=${node.port}`);
+            if (!res.ok) return;
+            const data: MeshTopic[] = await res.json();
+            data.forEach((topic) => {
+              topic.peers?.forEach((peer) => {
+                if (peer.peer_id) {
+                  allPeerIds.add(peer.peer_id);
+                }
+              });
+            });
+          } catch {
+            // Ignore errors for individual nodes
+          }
+        })
+      );
+
+      return {
+        uniqueCount: allPeerIds.size,
+        nodeCount: nodesWithEndpoints.length,
+      };
+    },
+    enabled: nodesWithEndpoints.length > 0,
+    staleTime: 30000,
+    refetchInterval: 60000,
+  });
+
+  if (nodesWithEndpoints.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="px-4 py-2 bg-muted/50 border-b text-sm">
+      <div className="flex items-center justify-between">
+        <span className="text-muted-foreground">
+          {nodesWithEndpoints.length} relay{nodesWithEndpoints.length !== 1 ? 's' : ''} with endpoint
+        </span>
+        <span className="flex items-center gap-1 font-medium">
+          <Users className="h-4 w-4" />
+          {isLoading ? (
+            <span className="text-muted-foreground">loading...</span>
+          ) : (
+            <span>{uniquePeerData?.uniqueCount || 0} unique mesh peers</span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export default function RelaysPage() {
   const queryClient = useQueryClient();
@@ -138,6 +243,7 @@ export default function RelaysPage() {
           country: data.country || null,
           status: data.status,
           endpoint: data.endpoint || null,
+          port: data.port ? parseInt(data.port, 10) : 5052,
         }),
       });
       if (!response.ok) throw new Error('Failed to create relay node');
@@ -166,6 +272,7 @@ export default function RelaysPage() {
           country: data.country || null,
           status: data.status,
           endpoint: data.endpoint || null,
+          port: data.port ? parseInt(data.port, 10) : 5052,
         }),
       });
       if (!response.ok) throw new Error('Failed to update relay node');
@@ -222,6 +329,7 @@ export default function RelaysPage() {
       country: node.country || '',
       status: node.status as 'active' | 'inactive' | 'maintenance',
       endpoint: node.endpoint || '',
+      port: String(node.port || 5052),
     });
     setIsModalOpen(true);
   };
@@ -448,6 +556,9 @@ export default function RelaysPage() {
                   </div>
                 </div>
 
+                {/* Unique Mesh Summary */}
+                <UniqueMeshSummary nodes={filteredNodes.map(n => ({ endpoint: n.endpoint, port: n.port || 5052 }))} />
+
                 {/* Node List */}
                 <div className="flex-1 overflow-y-auto">
                   {isLoading ? (
@@ -470,9 +581,12 @@ export default function RelaysPage() {
                           <div className="flex items-start justify-between">
                             <div className="flex-1 min-w-0">
                               <p className="font-medium truncate">{node.name}</p>
-                              <p className="text-xs text-muted-foreground truncate">
-                                {node.location || node.country || 'No location'}
-                              </p>
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <span className="truncate">
+                                  {node.location || node.country || 'No location'}
+                                </span>
+                                <MeshPeerCount endpoint={node.endpoint} port={node.port || 5052} />
+                              </div>
                             </div>
                             <div className="flex items-center gap-2 ml-2">
                               {node.tag && (
@@ -551,18 +665,28 @@ export default function RelaysPage() {
               />
             </div>
 
-            {/* Endpoint */}
+            {/* Endpoint & Port */}
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="endpoint" className="text-right">
                 Endpoint
               </Label>
-              <Input
-                id="endpoint"
-                value={formData.endpoint}
-                onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
-                className="col-span-3"
-                placeholder="e.g., 192.168.1.100"
-              />
+              <div className="col-span-3 flex gap-2">
+                <Input
+                  id="endpoint"
+                  value={formData.endpoint}
+                  onChange={(e) => setFormData({ ...formData, endpoint: e.target.value })}
+                  className="flex-1"
+                  placeholder="e.g., 192.168.1.100"
+                />
+                <Input
+                  id="port"
+                  type="number"
+                  value={formData.port}
+                  onChange={(e) => setFormData({ ...formData, port: e.target.value })}
+                  className="w-24"
+                  placeholder="5052"
+                />
+              </div>
             </div>
 
             {/* Latitude & Longitude */}

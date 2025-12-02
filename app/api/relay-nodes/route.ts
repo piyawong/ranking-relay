@@ -12,6 +12,7 @@ const createRelayNodeSchema = z.object({
   country: z.string().nullable().optional(),
   status: z.enum(['active', 'inactive', 'maintenance']).default('active'),
   endpoint: z.string().nullable().optional(),
+  port: z.number().int().min(1).max(65535).default(5052),
 });
 
 export async function GET(request: NextRequest) {
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
         country: validatedData.country || null,
         status: validatedData.status,
         endpoint: validatedData.endpoint || null,
+        port: validatedData.port,
       },
     });
 

@@ -68,6 +68,7 @@ interface RelayNode {
   country: string | null;
   status: string;
   endpoint: string | null;
+  port: number;
 }
 
 interface Peer {
@@ -131,6 +132,26 @@ const networkLoadLevels: Record<number, { name: string; mesh_n: number; heartbea
   18: { name: 'Insane', mesh_n: 36, heartbeat: '200ms' },
   19: { name: 'Insane', mesh_n: 38, heartbeat: '200ms' },
   20: { name: 'Ludicrous', mesh_n: 40, heartbeat: '200ms' },
+  21: { name: 'Ludicrous', mesh_n: 42, heartbeat: '180ms' },
+  22: { name: 'Absurd', mesh_n: 44, heartbeat: '180ms' },
+  23: { name: 'Absurd', mesh_n: 46, heartbeat: '160ms' },
+  24: { name: 'Absurd', mesh_n: 48, heartbeat: '160ms' },
+  25: { name: 'Ridiculous', mesh_n: 50, heartbeat: '150ms' },
+  26: { name: 'Ridiculous', mesh_n: 52, heartbeat: '150ms' },
+  27: { name: 'Ridiculous', mesh_n: 54, heartbeat: '140ms' },
+  28: { name: 'Plaid', mesh_n: 56, heartbeat: '140ms' },
+  29: { name: 'Plaid', mesh_n: 58, heartbeat: '130ms' },
+  30: { name: 'Plaid', mesh_n: 60, heartbeat: '130ms' },
+  31: { name: 'Warp', mesh_n: 62, heartbeat: '120ms' },
+  32: { name: 'Warp', mesh_n: 64, heartbeat: '120ms' },
+  33: { name: 'Warp', mesh_n: 66, heartbeat: '110ms' },
+  34: { name: 'Lightspeed', mesh_n: 68, heartbeat: '110ms' },
+  35: { name: 'Lightspeed', mesh_n: 70, heartbeat: '100ms' },
+  36: { name: 'Lightspeed', mesh_n: 72, heartbeat: '100ms' },
+  37: { name: 'Superluminal', mesh_n: 74, heartbeat: '90ms' },
+  38: { name: 'Superluminal', mesh_n: 76, heartbeat: '90ms' },
+  39: { name: 'Superluminal', mesh_n: 78, heartbeat: '80ms' },
+  40: { name: 'GodMode', mesh_n: 80, heartbeat: '80ms' },
 };
 
 interface BannedPeer {
@@ -176,8 +197,8 @@ interface RelayNodeDetailProps {
 }
 
 // Helper to build proxy URL
-function buildProxyUrl(endpoint: string, path: string): string {
-  return `/api/relay-proxy?endpoint=${encodeURIComponent(endpoint)}&path=${encodeURIComponent(path)}`;
+function buildProxyUrl(endpoint: string, path: string, port: number = 5052): string {
+  return `/api/relay-proxy?endpoint=${encodeURIComponent(endpoint)}&path=${encodeURIComponent(path)}&port=${port}`;
 }
 
 // Helper to parse client string and extract name and version
@@ -238,13 +259,14 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   };
 
   const endpoint = node.endpoint || null;
+  const port = node.port || 5052;
 
   // Fetch peers - GET /peers
   const { data: peersData, isLoading: peersLoading, refetch: refetchPeers } = useQuery({
     queryKey: ['relay-peers', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
-      const res = await fetch(buildProxyUrl(endpoint, '/peers'));
+      const res = await fetch(buildProxyUrl(endpoint, '/peers', port));
       if (!res.ok) throw new Error('Failed to fetch peers');
       return res.json() as Promise<Peer[]>;
     },
@@ -257,7 +279,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryKey: ['relay-trusted-peers', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
-      const res = await fetch(buildProxyUrl(endpoint, '/peers/trusted'));
+      const res = await fetch(buildProxyUrl(endpoint, '/peers/trusted', port));
       if (!res.ok) throw new Error('Failed to fetch trusted peers');
       return res.json() as Promise<TrustedPeer[]>;
     },
@@ -269,7 +291,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryKey: ['relay-discovery', node.id],
     queryFn: async () => {
       if (!endpoint) return null;
-      const res = await fetch(buildProxyUrl(endpoint, '/discovery/stats'));
+      const res = await fetch(buildProxyUrl(endpoint, '/discovery/stats', port));
       if (!res.ok) throw new Error('Failed to fetch discovery stats');
       return res.json() as Promise<DiscoveryStats>;
     },
@@ -281,7 +303,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryKey: ['relay-config', node.id],
     queryFn: async () => {
       if (!endpoint) return null;
-      const res = await fetch(buildProxyUrl(endpoint, '/config'));
+      const res = await fetch(buildProxyUrl(endpoint, '/config', port));
       if (!res.ok) throw new Error('Failed to fetch config');
       return res.json() as Promise<Config>;
     },
@@ -293,7 +315,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryKey: ['relay-node-info', node.id],
     queryFn: async () => {
       if (!endpoint) return null;
-      const res = await fetch(buildProxyUrl(endpoint, '/node/info'));
+      const res = await fetch(buildProxyUrl(endpoint, '/node/info', port));
       if (!res.ok) throw new Error('Failed to fetch node info');
       return res.json() as Promise<NodeInfo>;
     },
@@ -305,7 +327,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryKey: ['relay-banned-peers', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
-      const res = await fetch(buildProxyUrl(endpoint, '/peers/banned'));
+      const res = await fetch(buildProxyUrl(endpoint, '/peers/banned', port));
       if (!res.ok) throw new Error('Failed to fetch banned peers');
       return res.json() as Promise<BannedPeer[]>;
     },
@@ -318,7 +340,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryFn: async () => {
       if (!endpoint) return null;
       try {
-        const res = await fetch(buildProxyUrl(endpoint, '/eth/v1/node/health'));
+        const res = await fetch(buildProxyUrl(endpoint, '/eth/v1/node/health', port));
         return res.status; // 200 = healthy, 206 = syncing
       } catch {
         return null; // offline
@@ -333,7 +355,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryKey: ['relay-mesh', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
-      const res = await fetch(buildProxyUrl(endpoint, '/mesh'));
+      const res = await fetch(buildProxyUrl(endpoint, '/mesh', port));
       if (!res.ok) throw new Error('Failed to fetch mesh');
       return res.json() as Promise<MeshTopic[]>;
     },
@@ -345,7 +367,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     queryKey: ['relay-first-block-sender', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
-      const res = await fetch(buildProxyUrl(endpoint, '/stats/first-block-sender'));
+      const res = await fetch(buildProxyUrl(endpoint, '/stats/first-block-sender', port));
       if (!res.ok) throw new Error('Failed to fetch first block sender stats');
       return res.json() as Promise<FirstBlockSender[]>;
     },
@@ -358,7 +380,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     mutationFn: async ({ enr, multiaddr }: { enr?: string; multiaddr?: string }) => {
       if (!endpoint) throw new Error('No endpoint configured');
       const body = enr ? { enr } : { multiaddr };
-      const res = await fetch(buildProxyUrl(endpoint, '/peers'), {
+      const res = await fetch(buildProxyUrl(endpoint, '/peers', port), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -377,7 +399,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const disconnectPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/peers/${peerId}`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/peers/${peerId}`, port), {
         method: 'DELETE',
       });
       if (!res.ok) throw new Error('Failed to disconnect peer');
@@ -393,7 +415,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const trustPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/peers/trusted/${peerId}`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/peers/trusted/${peerId}`, port), {
         method: 'POST',
       });
       if (!res.ok) throw new Error('Failed to trust peer');
@@ -408,7 +430,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const removeTrustedPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/peers/trusted/${peerId}`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/peers/trusted/${peerId}`, port), {
         method: 'DELETE',
       });
       if (!res.ok) throw new Error('Failed to remove trusted peer');
@@ -423,7 +445,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const updateConfigMutation = useMutation({
     mutationFn: async (config: { target_peers?: number; max_latency_ms?: number; network_load?: number }) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, '/config'), {
+      const res = await fetch(buildProxyUrl(endpoint, '/config', port), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -445,7 +467,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const banPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/peers/${peerId}/ban`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/peers/${peerId}/ban`, port), {
         method: 'POST',
       });
       if (!res.ok) throw new Error('Failed to ban peer');
@@ -462,7 +484,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const unbanPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/peers/${peerId}/ban`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/peers/${peerId}/ban`, port), {
         method: 'DELETE',
       });
       if (!res.ok) throw new Error('Failed to unban peer');
@@ -477,7 +499,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const addExplicitPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/mesh/explicit/${peerId}`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/mesh/explicit/${peerId}`, port), {
         method: 'POST',
       });
       if (!res.ok) throw new Error('Failed to add explicit peer');
@@ -492,7 +514,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const removeExplicitPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/mesh/explicit/${peerId}`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/mesh/explicit/${peerId}`, port), {
         method: 'DELETE',
       });
       if (!res.ok) throw new Error('Failed to remove explicit peer');
@@ -508,7 +530,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     mutationFn: async ({ topic, peerId }: { topic: string; peerId: string }) => {
       if (!endpoint) throw new Error('No endpoint configured');
       const encodedTopic = encodeURIComponent(topic);
-      const res = await fetch(buildProxyUrl(endpoint, `/mesh/${encodedTopic}/${peerId}`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/mesh/${encodedTopic}/${peerId}`, port), {
         method: 'POST',
       });
       if (!res.ok) throw new Error('Failed to graft peer');
@@ -524,7 +546,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     mutationFn: async ({ topic, peerId }: { topic: string; peerId: string }) => {
       if (!endpoint) throw new Error('No endpoint configured');
       const encodedTopic = encodeURIComponent(topic);
-      const res = await fetch(buildProxyUrl(endpoint, `/mesh/${encodedTopic}/${peerId}`), {
+      const res = await fetch(buildProxyUrl(endpoint, `/mesh/${encodedTopic}/${peerId}`, port), {
         method: 'DELETE',
       });
       if (!res.ok) throw new Error('Failed to prune peer');
@@ -678,7 +700,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
           </div>
         </div>
         <p className="text-xs text-muted-foreground mt-1 font-mono">
-          API: http://{endpoint}:5052
+          API: http://{endpoint}:{port}
         </p>
       </div>
 
@@ -1266,7 +1288,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
 
             {/* Network Load */}
             <div>
-              <label className="text-sm font-medium">Network Load Level (1-20)</label>
+              <label className="text-sm font-medium">Network Load Level (1-40)</label>
               <p className="text-xs text-muted-foreground mb-2">
                 Controls gossipsub mesh size and heartbeat interval. <span className="text-green-600 font-medium">Takes effect immediately.</span>
               </p>

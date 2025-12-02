@@ -12,6 +12,7 @@ const updateRelayNodeSchema = z.object({
   country: z.string().nullable().optional(),
   status: z.enum(['active', 'inactive', 'maintenance']).optional(),
   endpoint: z.string().nullable().optional(),
+  port: z.number().int().min(1).max(65535).optional(),
 });
 
 export async function GET(
@@ -78,6 +79,7 @@ export async function PUT(
         ...(validatedData.country !== undefined && { country: validatedData.country }),
         ...(validatedData.status !== undefined && { status: validatedData.status }),
         ...(validatedData.endpoint !== undefined && { endpoint: validatedData.endpoint || null }),
+        ...(validatedData.port !== undefined && { port: validatedData.port }),
       },
     });
 

@@ -40,6 +40,9 @@ model Block {
   @@index([execution_block_number])
   @@index([block_hash])
   @@index([is_win_bloxroute])
+  // Composite indexes for bloxroute comparison queries
+  @@index([origin, bloxroute_timestamp, is_win_bloxroute])
+  @@index([block_number(sort: Desc), origin])
 }
 
 model RelayDetail {
@@ -58,6 +61,8 @@ model RelayDetail {
   @@index([relay_name])
   @@index([ranking_score])
   @@index([arrival_timestamp])
+  // Composite index for getting first relay efficiently
+  @@index([block_id, arrival_order])
 }
 
 model RelayStatistics {
@@ -133,6 +138,7 @@ model RelayNode {
   country     String?
   status      String   @default("active") // active, inactive, maintenance
   endpoint    String?
+  port        Int      @default(5052)  // API port, default 5052
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
 

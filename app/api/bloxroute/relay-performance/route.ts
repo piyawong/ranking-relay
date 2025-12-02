@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db/prisma';
+import { Prisma } from '@prisma/client';
 import type { ApiResponse } from '@/lib/types/api';
 
-// GET /api/bloxroute/relay-performance - Get win rate statistics per relay
+// GET /api/bloxroute/relay-performance - Get win rate statistics per relay (OPTIMIZED with SQL aggregation)
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -15,126 +16,99 @@ export async function GET(request: NextRequest) {
     const dateFrom = searchParams.get('dateFrom');
     const dateTo = searchParams.get('dateTo');
 
-    // Build where clause
-    const whereClause: any = {
-      origin: { not: null },
-      bloxroute_timestamp: { not: null },
-      is_win_bloxroute: { not: null },
-    };
+    // Build WHERE conditions for Block table
+    const conditions: Prisma.Sql[] = [
+      Prisma.sql`b.origin IS NOT NULL`,
+      Prisma.sql`b.bloxroute_timestamp IS NOT NULL`,
+      Prisma.sql`b.is_win_bloxroute IS NOT NULL`,
+    ];
 
-    // Add location filter if specified
     if (location && location !== 'all') {
-      whereClause.origin = location;
+      conditions.push(Prisma.sql`b.origin = ${location}`);
     }
 
-    // Exclude locations
     if (excludeLocations.length > 0) {
-      if (whereClause.origin === undefined || typeof whereClause.origin === 'string') {
-        whereClause.origin = {
-          notIn: excludeLocations,
-          ...(location && location !== 'all' ? { equals: location } : { not: null })
-        };
-      }
+      conditions.push(Prisma.sql`b.origin NOT IN (${Prisma.join(excludeLocations)})`);
     }
 
-    // Handle block range filter
     if (blockRangeStart !== null && blockRangeEnd !== null) {
-      whereClause.block_number = {
-        gte: blockRangeStart,
-        lte: blockRangeEnd,
+      conditions.push(Prisma.sql`b.block_number >= ${blockRangeStart}`);
+      conditions.push(Prisma.sql`b.block_number <= ${blockRangeEnd}`);
+    }
+
+    // Handle lastBlocks filter
+    if (lastBlocks && lastBlocks > 0 && blockRangeStart === null) {
+      const latestBlocks = await prisma.$queryRaw<{ block_number: number }[]>`
+        SELECT block_number FROM "Block"
+        WHERE origin IS NOT NULL
+          AND bloxroute_timestamp IS NOT NULL
+          AND is_win_bloxroute IS NOT NULL
+        ORDER BY block_number DESC
+        LIMIT ${lastBlocks}
+      `;
+      const blockNumbers = latestBlocks.map(b => b.block_number);
+      if (blockNumbers.length > 0) {
+        conditions.push(Prisma.sql`b.block_number IN (${Prisma.join(blockNumbers)})`);
+      }
+    }
+
+    if (dateFrom) {
+      conditions.push(Prisma.sql`b.created_at >= ${new Date(dateFrom)}`);
+    }
+
+    if (dateTo) {
+      const endDate = new Date(dateTo);
+      endDate.setDate(endDate.getDate() + 1);
+      conditions.push(Prisma.sql`b.created_at <= ${endDate}`);
+    }
+
+    // Build relay exclusion condition
+    const relayExclusionCondition = excludeRelays.length > 0
+      ? Prisma.sql`AND first_relay.relay_name NOT IN (${Prisma.join(excludeRelays)})`
+      : Prisma.sql``;
+
+    const whereClause = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`;
+
+    // Use SQL aggregation with GROUP BY - much faster than fetching all records
+    const relayStats = await prisma.$queryRaw<{
+      relay_name: string;
+      total_blocks: bigint;
+      relay_wins: bigint;
+      bloxroute_wins: bigint;
+    }[]>`
+      SELECT
+        first_relay.relay_name,
+        COUNT(*)::bigint as total_blocks,
+        COUNT(*) FILTER (WHERE b.is_win_bloxroute = false)::bigint as relay_wins,
+        COUNT(*) FILTER (WHERE b.is_win_bloxroute = true)::bigint as bloxroute_wins
+      FROM "Block" b
+      INNER JOIN LATERAL (
+        SELECT relay_name FROM "RelayDetail" rd
+        WHERE rd.block_id = b.id
+        ORDER BY rd.arrival_order ASC
+        LIMIT 1
+      ) first_relay ON true
+      ${whereClause}
+      ${relayExclusionCondition}
+      GROUP BY first_relay.relay_name
+      ORDER BY COUNT(*) FILTER (WHERE b.is_win_bloxroute = false)::float / NULLIF(COUNT(*), 0) DESC
+    `;
+
+    // Map results
+    const relayPerformance = relayStats.map(stat => {
+      const totalBlocks = Number(stat.total_blocks);
+      const relayWins = Number(stat.relay_wins);
+      const bloxrouteWins = Number(stat.bloxroute_wins);
+
+      return {
+        relay_name: stat.relay_name,
+        total_blocks: totalBlocks,
+        relay_wins: relayWins,
+        bloxroute_wins: bloxrouteWins,
+        relay_win_rate: totalBlocks > 0 ? (relayWins / totalBlocks) * 100 : 0,
+        bloxroute_win_rate: totalBlocks > 0 ? (bloxrouteWins / totalBlocks) * 100 : 0,
       };
-    }
-    // If lastBlocks is specified, get the latest X blocks first
-    else if (lastBlocks && lastBlocks > 0) {
-      // Get the latest X block numbers with bloxroute data
-      const latestBlocks = await prisma.block.findMany({
-        where: {
-          origin: { not: null },
-          bloxroute_timestamp: { not: null },
-          is_win_bloxroute: { not: null },
-        },
-        orderBy: { block_number: 'desc' },
-        take: lastBlocks,
-        select: { block_number: true },
-      });
-
-      if (latestBlocks.length > 0) {
-        const blockNumbers = latestBlocks.map(b => b.block_number);
-        whereClause.block_number = {
-          in: blockNumbers,
-        };
-      }
-    }
-
-    // Handle date range filter
-    if (dateFrom || dateTo) {
-      whereClause.created_at = {};
-      if (dateFrom) {
-        whereClause.created_at.gte = new Date(dateFrom);
-      }
-      if (dateTo) {
-        // Add one day to include the entire end date
-        const endDate = new Date(dateTo);
-        endDate.setDate(endDate.getDate() + 1);
-        whereClause.created_at.lte = endDate;
-      }
-    }
-
-    // Fetch all blocks with their first relay detail
-    const blocks = await prisma.block.findMany({
-      where: whereClause,
-      include: {
-        relay_details: {
-          orderBy: { arrival_order: 'asc' },
-          take: 1, // Only get first relay
-        },
-      },
     });
-
-    // Aggregate data by relay name
-    const relayStats: {
-      [key: string]: {
-        totalBlocks: number;
-        relayWins: number;
-        bloxrouteWins: number;
-      }
-    } = {};
-
-    blocks.forEach(block => {
-      const firstRelay = block.relay_details[0];
-      if (!firstRelay || block.is_win_bloxroute === null) return;
-
-      const relayName = firstRelay.relay_name;
-
-      // Skip excluded relays
-      if (excludeRelays.includes(relayName)) return;
-
-      if (!relayStats[relayName]) {
-        relayStats[relayName] = {
-          totalBlocks: 0,
-          relayWins: 0,
-          bloxrouteWins: 0,
-        };
-      }
-
-      relayStats[relayName].totalBlocks++;
-
-      if (block.is_win_bloxroute) {
-        relayStats[relayName].bloxrouteWins++;
-      } else {
-        relayStats[relayName].relayWins++;
-      }
-    });
-
-    // Convert to array and calculate percentages
-    const relayPerformance = Object.entries(relayStats).map(([relayName, stats]) => ({
-      relay_name: relayName,
-      total_blocks: stats.totalBlocks,
-      relay_wins: stats.relayWins,
-      bloxroute_wins: stats.bloxrouteWins,
-      relay_win_rate: stats.totalBlocks > 0 ? (stats.relayWins / stats.totalBlocks) * 100 : 0,
-      bloxroute_win_rate: stats.totalBlocks > 0 ? (stats.bloxrouteWins / stats.totalBlocks) * 100 : 0,
-    })).sort((a, b) => b.relay_win_rate - a.relay_win_rate); // Sort by relay win rate descending
 
     return NextResponse.json<ApiResponse>({
       success: true,

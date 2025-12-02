@@ -169,6 +169,31 @@ export default function TradePage() {
     return `${(ms / 1000).toFixed(2)}s`;
   };
 
+  const formatRelativeTime = (timestamp: string) => {
+    const now = new Date();
+    const time = new Date(timestamp);
+    const diffMs = now.getTime() - time.getTime();
+    const diffSeconds = Math.floor(diffMs / 1000);
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffSeconds < 60) {
+      return `${diffSeconds}s ago`;
+    } else if (diffMinutes < 60) {
+      return `${diffMinutes}m ago`;
+    } else if (diffHours < 24) {
+      return `${diffHours}h ago`;
+    } else if (diffDays < 7) {
+      return `${diffDays}d ago`;
+    } else {
+      return time.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
+      });
+    }
+  };
+
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat('en-US').format(num);
   };
@@ -761,13 +786,8 @@ export default function TradePage() {
                     }`}
                     onClick={() => router.push(`/trades/${trade.trade_id || trade.id}`)}
                   >
-                    <TableCell className="font-mono text-xs">
-                      {new Date(trade.timestamp).toLocaleString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
+                    <TableCell className="font-mono text-xs" title={new Date(trade.timestamp).toLocaleString()}>
+                      {formatRelativeTime(trade.timestamp)}
                     </TableCell>
                     {/* Consolidated Trade column: trigger + direction + amount */}
                     <TableCell>

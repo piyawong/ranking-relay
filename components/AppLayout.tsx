@@ -7,6 +7,7 @@ import { Activity, Menu, X } from 'lucide-react';
 const navLinks = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/slots', label: 'Block Slots' },
+  { href: '/slot-detail', label: 'Slot Map' },
   { href: '/bloxroute', label: 'Bloxroute' },
   { href: '/rankings', label: 'Rankings' },
   { href: '/relays', label: 'All Relays' },

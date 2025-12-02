@@ -837,7 +837,7 @@ export default function BloxroutePage() {
                     'text-2xl font-bold',
                     statistics.avg_time_difference_ms < 0 ? 'text-green-600' : 'text-red-600'
                   )}>
-                    {statistics.avg_time_difference_ms.toFixed(0)}ms
+                    {statistics.avg_time_difference_ms != null ? Number(statistics.avg_time_difference_ms).toFixed(0) : '0'}ms
                   </p>
                 </div>
               </div>

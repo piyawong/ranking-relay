@@ -24,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { RefreshCw, Search, Award, Zap, Timer, Package, RotateCcw, Trash2 } from 'lucide-react';
+import { RefreshCw, Search, Award, Zap, Timer, Package, RotateCcw, Trash2, MapPin } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -192,6 +192,12 @@ function DashboardContent() {
             <Button variant="outline" size="sm">
               <Award className="h-4 w-4 mr-2" />
               View Rankings
+            </Button>
+          </Link>
+          <Link href={currentBlockNumber > 0 ? `/slot-detail?block=${currentBlockNumber}` : '/slot-detail'}>
+            <Button variant="outline" size="sm">
+              <MapPin className="h-4 w-4 mr-2" />
+              Map View
             </Button>
           </Link>
           <AlertDialog>

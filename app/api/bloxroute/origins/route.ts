@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db/prisma';
+import { Prisma } from '@prisma/client';
 import type { ApiResponse } from '@/lib/types/api';
 
-// GET /api/bloxroute/origins - Get origin statistics from all blocks
+// GET /api/bloxroute/origins - Get origin statistics from all blocks (OPTIMIZED with SQL aggregation)
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -15,140 +16,121 @@ export async function GET(request: NextRequest) {
     const dateFrom = searchParams.get('dateFrom');
     const dateTo = searchParams.get('dateTo');
 
-    // Build where clause
-    const whereClause: any = {
-      origin: { not: null },
-      bloxroute_timestamp: { not: null },
-      is_win_bloxroute: { not: null },
-    };
+    // Build WHERE conditions
+    const conditions: Prisma.Sql[] = [
+      Prisma.sql`b.origin IS NOT NULL`,
+      Prisma.sql`b.bloxroute_timestamp IS NOT NULL`,
+      Prisma.sql`b.is_win_bloxroute IS NOT NULL`,
+    ];
 
-    // Add location filter if specified
     if (location && location !== 'all') {
-      whereClause.origin = location;
+      conditions.push(Prisma.sql`b.origin = ${location}`);
     }
 
-    // Exclude locations
     if (excludeLocations.length > 0) {
-      if (whereClause.origin === undefined || typeof whereClause.origin === 'string') {
-        whereClause.origin = {
-          notIn: excludeLocations,
-          ...(location && location !== 'all' ? { equals: location } : { not: null })
-        };
-      }
+      conditions.push(Prisma.sql`b.origin NOT IN (${Prisma.join(excludeLocations)})`);
     }
 
-    // Handle block range filter
     if (blockRangeStart !== null && blockRangeEnd !== null) {
-      whereClause.block_number = {
-        gte: blockRangeStart,
-        lte: blockRangeEnd,
-      };
+      conditions.push(Prisma.sql`b.block_number >= ${blockRangeStart}`);
+      conditions.push(Prisma.sql`b.block_number <= ${blockRangeEnd}`);
     }
-    // Handle last blocks filter
-    else if (lastBlocks && lastBlocks > 0) {
-      // Get the latest X block numbers with origin data
-      const latestBlocks = await prisma.block.findMany({
-        where: {
-          origin: { not: null },
-          bloxroute_timestamp: { not: null },
-          is_win_bloxroute: { not: null },
-        },
-        orderBy: { block_number: 'desc' },
-        take: lastBlocks,
-        select: { block_number: true },
-      });
 
-      if (latestBlocks.length > 0) {
-        const blockNumbers = latestBlocks.map(b => b.block_number);
-        whereClause.block_number = {
-          in: blockNumbers,
-        };
+    // Handle lastBlocks filter
+    let blockNumbers: number[] | undefined;
+    if (lastBlocks && lastBlocks > 0 && blockRangeStart === null) {
+      const latestBlocks = await prisma.$queryRaw<{ block_number: number }[]>`
+        SELECT block_number FROM "Block"
+        WHERE origin IS NOT NULL
+          AND bloxroute_timestamp IS NOT NULL
+          AND is_win_bloxroute IS NOT NULL
+        ORDER BY block_number DESC
+        LIMIT ${lastBlocks}
+      `;
+      blockNumbers = latestBlocks.map(b => b.block_number);
+      if (blockNumbers.length > 0) {
+        conditions.push(Prisma.sql`b.block_number IN (${Prisma.join(blockNumbers)})`);
       }
     }
 
-    // Handle date range filter
-    if (dateFrom || dateTo) {
-      whereClause.created_at = {};
-      if (dateFrom) {
-        whereClause.created_at.gte = new Date(dateFrom);
-      }
-      if (dateTo) {
-        // Add one day to include the entire end date
-        const endDate = new Date(dateTo);
-        endDate.setDate(endDate.getDate() + 1);
-        whereClause.created_at.lte = endDate;
-      }
+    if (dateFrom) {
+      conditions.push(Prisma.sql`b.created_at >= ${new Date(dateFrom)}`);
     }
 
-    // Get blocks with origin data and comparison results
-    const blocks = await prisma.block.findMany({
-      where: whereClause,
-      include: {
-        relay_details: {
-          orderBy: { arrival_order: 'asc' },
-          take: 1, // Only get first relay for filtering
-        },
-      },
-    });
+    if (dateTo) {
+      const endDate = new Date(dateTo);
+      endDate.setDate(endDate.getDate() + 1);
+      conditions.push(Prisma.sql`b.created_at <= ${endDate}`);
+    }
 
-    // Count occurrences and calculate win/loss stats for each origin
-    const originCounts: { [key: string]: number } = {};
-    const originBlocks: { [key: string]: number[] } = {};
-    const originRelayWins: { [key: string]: number } = {};
-    const originBloxrouteWins: { [key: string]: number } = {};
+    // Build relay exclusion
+    const relayJoin = excludeRelays.length > 0
+      ? Prisma.sql`
+          INNER JOIN LATERAL (
+            SELECT relay_name FROM "RelayDetail" rd
+            WHERE rd.block_id = b.id
+            ORDER BY rd.arrival_order ASC
+            LIMIT 1
+          ) first_relay ON first_relay.relay_name NOT IN (${Prisma.join(excludeRelays)})
+        `
+      : Prisma.sql``;
 
-    blocks.forEach(block => {
-      if (block.origin && block.is_win_bloxroute !== null) {
-        const firstRelay = block.relay_details[0];
+    const whereClause = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`;
 
-        // Skip if relay is excluded
-        if (excludeRelays.length > 0 && firstRelay && excludeRelays.includes(firstRelay.relay_name)) {
-          return;
-        }
+    // Use SQL GROUP BY for aggregation - much faster than fetching all records
+    const [originStats, totalBlocks] = await Promise.all([
+      prisma.$queryRaw<{
+        origin: string;
+        count: bigint;
+        relay_wins: bigint;
+        bloxroute_wins: bigint;
+      }[]>`
+        SELECT
+          b.origin,
+          COUNT(*)::bigint as count,
+          COUNT(*) FILTER (WHERE b.is_win_bloxroute = false)::bigint as relay_wins,
+          COUNT(*) FILTER (WHERE b.is_win_bloxroute = true)::bigint as bloxroute_wins
+        FROM "Block" b
+        ${relayJoin}
+        ${whereClause}
+        GROUP BY b.origin
+        ORDER BY count DESC
+      `,
 
-        // Count blocks per origin
-        originCounts[block.origin] = (originCounts[block.origin] || 0) + 1;
+      prisma.$queryRaw<{ total: bigint }[]>`
+        SELECT COUNT(*)::bigint as total
+        FROM "Block" b
+        ${relayJoin}
+        ${whereClause}
+      `,
+    ]);
 
-        if (!originBlocks[block.origin]) {
-          originBlocks[block.origin] = [];
-          originRelayWins[block.origin] = 0;
-          originBloxrouteWins[block.origin] = 0;
-        }
-        originBlocks[block.origin].push(block.block_number);
+    const total = Number(totalBlocks[0]?.total || 0);
 
-        // Use stored comparison result
-        if (block.is_win_bloxroute) {
-          originBloxrouteWins[block.origin]++;
-        } else {
-          originRelayWins[block.origin]++;
-        }
-      }
-    });
-
-    // Convert to array and sort by count
-    const originStats = Object.entries(originCounts).map(([origin, count]) => {
-      const relayWins = originRelayWins[origin] || 0;
-      const bloxrouteWins = originBloxrouteWins[origin] || 0;
-      const total = relayWins + bloxrouteWins;
+    // Map results
+    const origins = originStats.map(stat => {
+      const count = Number(stat.count);
+      const relayWins = Number(stat.relay_wins);
+      const bloxrouteWins = Number(stat.bloxroute_wins);
+      const statTotal = relayWins + bloxrouteWins;
 
       return {
-        origin,
+        origin: stat.origin,
         count,
-        percentage: (count / blocks.length) * 100,
+        percentage: total > 0 ? (count / total) * 100 : 0,
         relay_wins: relayWins,
         bloxroute_wins: bloxrouteWins,
-        relay_win_percentage: total > 0 ? (relayWins / total) * 100 : 0,
-        bloxroute_win_percentage: total > 0 ? (bloxrouteWins / total) * 100 : 0,
-        blocks: originBlocks[origin].sort((a, b) => b - a), // Sort blocks descending
+        relay_win_percentage: statTotal > 0 ? (relayWins / statTotal) * 100 : 0,
+        bloxroute_win_percentage: statTotal > 0 ? (bloxrouteWins / statTotal) * 100 : 0,
       };
-    }).sort((a, b) => b.count - a.count);
+    });
 
     return NextResponse.json<ApiResponse>({
       success: true,
       data: {
-        total_blocks: blocks.length,
-        unique_origins: originStats.length,
-        origins: originStats,
+        total_blocks: total,
+        unique_origins: origins.length,
+        origins,
       },
     });
   } catch (error) {

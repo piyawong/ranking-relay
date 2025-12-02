@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const API_PORT = 5052;
+const DEFAULT_API_PORT = 5052;
 const TIMEOUT_MS = 10000;
 
 /**
@@ -10,11 +10,14 @@ const TIMEOUT_MS = 10000;
  * Query params:
  * - endpoint: The relay node IP address (required)
  * - path: The API path to call (required, e.g., /peers/rtt)
+ * - port: The API port (optional, defaults to 5052)
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const endpoint = searchParams.get('endpoint');
   const path = searchParams.get('path');
+  const portParam = searchParams.get('port');
+  const port = portParam ? parseInt(portParam, 10) : DEFAULT_API_PORT;
 
   if (!endpoint) {
     return NextResponse.json(
@@ -42,7 +45,7 @@ export async function GET(request: NextRequest) {
 
   // Ensure path starts with /
   const apiPath = path.startsWith('/') ? path : `/${path}`;
-  const url = `http://${endpoint}:${API_PORT}${apiPath}`;
+  const url = `http://${endpoint}:${port}${apiPath}`;
 
   try {
     const controller = new AbortController();
@@ -101,6 +104,8 @@ export async function POST(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const endpoint = searchParams.get('endpoint');
   const path = searchParams.get('path');
+  const portParam = searchParams.get('port');
+  const port = portParam ? parseInt(portParam, 10) : DEFAULT_API_PORT;
 
   if (!endpoint) {
     return NextResponse.json(
@@ -127,7 +132,7 @@ export async function POST(request: NextRequest) {
   }
 
   const apiPath = path.startsWith('/') ? path : `/${path}`;
-  const url = `http://${endpoint}:${API_PORT}${apiPath}`;
+  const url = `http://${endpoint}:${port}${apiPath}`;
 
   try {
     // Get request body if present
@@ -190,6 +195,8 @@ export async function DELETE(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const endpoint = searchParams.get('endpoint');
   const path = searchParams.get('path');
+  const portParam = searchParams.get('port');
+  const port = portParam ? parseInt(portParam, 10) : DEFAULT_API_PORT;
 
   if (!endpoint) {
     return NextResponse.json(
@@ -216,7 +223,7 @@ export async function DELETE(request: NextRequest) {
   }
 
   const apiPath = path.startsWith('/') ? path : `/${path}`;
-  const url = `http://${endpoint}:${API_PORT}${apiPath}`;
+  const url = `http://${endpoint}:${port}${apiPath}`;
 
   try {
     const controller = new AbortController();
@@ -269,6 +276,8 @@ export async function PATCH(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const endpoint = searchParams.get('endpoint');
   const path = searchParams.get('path');
+  const portParam = searchParams.get('port');
+  const port = portParam ? parseInt(portParam, 10) : DEFAULT_API_PORT;
 
   if (!endpoint) {
     return NextResponse.json(
@@ -295,7 +304,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   const apiPath = path.startsWith('/') ? path : `/${path}`;
-  const url = `http://${endpoint}:${API_PORT}${apiPath}`;
+  const url = `http://${endpoint}:${port}${apiPath}`;
 
   try {
     let body: string | undefined;

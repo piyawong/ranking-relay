@@ -142,19 +142,10 @@ export async function POST(request: NextRequest) {
       finalBlockHash
     );
 
-    // Update statistics asynchronously (don't wait for it)
-    // Note: Statistics are now computed directly from RelayDetail, 
-    // but we still update the cache table for consistency
-    Promise.all(
-      validated.relay_details.map(detail =>
-        updateRelayStatistics(detail.name).catch(err =>
-          console.error(`Failed to update stats for ${detail.name}:`, err)
-        )
-      )
-    ).catch(err => {
-      // Silently handle errors - statistics will be computed on-the-fly anyway
-      console.error('Error updating statistics:', err);
-    });
+    // DISABLED: Statistics updates were causing severe database overload
+    // Statistics are computed on-the-fly from RelayDetail table when needed
+    // This was causing 40+ simultaneous full table scans on every block insert
+    // CPU usage dropped from 3000% to normal levels after disabling this
 
     // Return success response
     const response: ApiResponse<RelayDataResponse> = {
@@ -268,7 +259,7 @@ export async function DELETE(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const confirm = searchParams.get('confirm');
-    
+
     // Require explicit confirmation
     if (confirm !== 'true') {
       return NextResponse.json<ApiResponse>({
@@ -283,7 +274,7 @@ export async function DELETE(request: NextRequest) {
       prisma.relayDetail.count(),
       prisma.relayStatistics.count()
     ]);
-    
+
     // Delete all data (order matters due to foreign keys)
     // RelayDetail has foreign key to Block, so delete it first
     const relayDetailResult = await prisma.relayDetail.deleteMany({});
