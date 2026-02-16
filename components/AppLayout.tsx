@@ -13,6 +13,7 @@ const navLinks = [
   { href: '/relays', label: 'All Relays' },
   { href: '/relay-management', label: 'Relay Mgmt' },
   { href: '/trades', label: 'Trades' },
+  { href: '/report', label: 'Report' },
   { href: '/services', label: 'Services' },
   { href: '/api/health', label: 'API Status', external: true },
 ];

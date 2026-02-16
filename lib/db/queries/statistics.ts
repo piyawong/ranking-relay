@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { prisma } from '../prisma';
 import type { RelayStatistics } from '@prisma/client';
 import { decimalToNumber } from '@/lib/utils/format';
@@ -29,10 +30,14 @@ interface StatisticsFilters {
 /**
  * Get all relay statistics
  * Computes statistics directly from RelayDetail to ensure all relays are included
+ * OPTIMIZED: Default to last 1000 blocks to avoid full table scan (fast load)
  */
 export async function getAllStatistics(filters?: StatisticsFilters): Promise<RelayStatistics[]> {
   const timeCutoff = getTimeCutoff(filters?.timeRange);
-  const blockRange = filters?.blockRange;
+  // Default to last 1000 blocks for fast initial load - user can increase if needed
+  // Only skip default if a real time filter (1h, 6h, etc) is provided
+  const hasRealTimeFilter = filters?.timeRange && filters.timeRange !== 'all';
+  const blockRange = filters?.blockRange ?? (hasRealTimeFilter ? undefined : 1000);
 
   // Build WHERE conditions for filtering
   let whereConditions = '';
@@ -134,20 +139,24 @@ export async function updateRelayStatistics(
   ) / totalBlocks;
   const firstArrivalCount = relayDetails.filter(r => r.arrival_order === 0).length;
 
+  const now = new Date();
   return prisma.relayStatistics.upsert({
     where: { relay_name: relayName },
     update: {
       total_blocks: totalBlocks,
       avg_latency: avgLatency,
       avg_loss: avgLoss,
-      first_arrival_count: firstArrivalCount
+      first_arrival_count: firstArrivalCount,
+      last_updated: now
     },
     create: {
+      id: randomUUID(),
       relay_name: relayName,
       total_blocks: totalBlocks,
       avg_latency: avgLatency,
       avg_loss: avgLoss,
-      first_arrival_count: firstArrivalCount
+      first_arrival_count: firstArrivalCount,
+      last_updated: now
     }
   });
 }
@@ -168,10 +177,13 @@ export async function updateAllStatistics(): Promise<void> {
 
 /**
  * Get performance summary statistics
+ * OPTIMIZED: Default to last 1000 blocks for fast initial load
  */
 export async function getPerformanceSummary(filters?: StatisticsFilters) {
   const timeCutoff = getTimeCutoff(filters?.timeRange);
-  const blockRange = filters?.blockRange;
+  // Default to last 1000 blocks for fast initial load
+  const hasRealTimeFilter = filters?.timeRange && filters.timeRange !== 'all';
+  const blockRange = filters?.blockRange ?? (hasRealTimeFilter ? undefined : 1000);
 
   // Build WHERE conditions
   const whereClause: any = {};

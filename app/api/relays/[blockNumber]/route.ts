@@ -8,10 +8,11 @@ import type { ApiResponse, BlockData } from '@/lib/types/api';
 // GET /api/relays/[blockNumber] - Get specific block data
 export async function GET(
   request: NextRequest,
-  { params }: { params: { blockNumber: string } }
+  { params }: { params: Promise<{ blockNumber: string }> }
 ) {
   try {
-    const blockNumber = parseInt(params.blockNumber, 10);
+    const { blockNumber: blockNumberStr } = await params;
+    const blockNumber = parseInt(blockNumberStr, 10);
 
     if (isNaN(blockNumber) || blockNumber <= 0) {
       return NextResponse.json<ApiResponse>({
@@ -38,7 +39,7 @@ export async function GET(
       bloxroute_timestamp: block.bloxroute_timestamp?.toISOString(),
       created_at: block.created_at.toISOString(),
       updated_at: block.updated_at.toISOString(),
-      relay_details: block.relay_details.map(detail => ({
+      relay_details: block.RelayDetail.map(detail => ({
         id: detail.id,
         block_id: detail.block_id,
         relay_name: detail.relay_name,
@@ -67,10 +68,11 @@ export async function GET(
 // PATCH /api/relays/[blockNumber] - Refresh Bloxroute data for a specific block
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { blockNumber: string } }
+  { params }: { params: Promise<{ blockNumber: string }> }
 ) {
   try {
-    const blockNumber = parseInt(params.blockNumber, 10);
+    const { blockNumber: blockNumberStr } = await params;
+    const blockNumber = parseInt(blockNumberStr, 10);
 
     if (isNaN(blockNumber) || blockNumber <= 0) {
       return NextResponse.json<ApiResponse>({
@@ -147,7 +149,7 @@ export async function PATCH(
         bloxroute_timestamp: bloxrouteTimestamp || block.bloxroute_timestamp,
       },
       include: {
-        relay_details: {
+        RelayDetail: {
           orderBy: { ranking_score: 'asc' }
         }
       }
@@ -162,7 +164,7 @@ export async function PATCH(
       bloxroute_timestamp: updatedBlock.bloxroute_timestamp?.toISOString(),
       created_at: updatedBlock.created_at.toISOString(),
       updated_at: updatedBlock.updated_at.toISOString(),
-      relay_details: updatedBlock.relay_details.map(detail => ({
+      relay_details: updatedBlock.RelayDetail.map(detail => ({
         id: detail.id,
         block_id: detail.block_id,
         relay_name: detail.relay_name,

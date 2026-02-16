@@ -35,10 +35,16 @@ import {
   getProfitLossColor
 } from '@/lib/utils/profit-analytics';
 
-// Fetch balance analytics
-async function fetchBalanceAnalytics() {
-  // Fetch all available data (limit=0 means no limit)
-  const response = await fetch('/api/balance/analytics?limit=0');
+// Fetch balance analytics with time range
+async function fetchBalanceAnalytics(timeRange: string = '24h', customDays?: string) {
+  // Build query params
+  const params = new URLSearchParams();
+  params.set('range', timeRange);
+  if (customDays && parseInt(customDays, 10) > 0) {
+    params.set('days', customDays);
+  }
+
+  const response = await fetch(`/api/balance/analytics?${params.toString()}`);
   if (!response.ok) throw new Error('Failed to fetch analytics');
   const data = await response.json();
   return data.data;
@@ -120,7 +126,7 @@ export default function DashboardPage() {
   const [isFlushing, setIsFlushing] = useState(false);
   const [isCleaningHighDiff, setIsCleaningHighDiff] = useState(false);
   const [cleanupProgress, setCleanupProgress] = useState({ current: 0, total: 0 });
-  const [timeRange, setTimeRange] = useState<TimeRange>('24h');
+  const [timeRange, setTimeRange] = useState<TimeRange>('all');
   const [customDays, setCustomDays] = useState<string>('');
   const [useMockData, setUseMockData] = useState(false);
   const [showSpikes, setShowSpikes] = useState(false);
@@ -147,10 +153,10 @@ export default function DashboardPage() {
     };
   }, [liveHistory]);
 
-  // Fetch analytics data
+  // Fetch analytics data - refetch when time range changes
   const { data: analytics, isLoading, refetch } = useQuery({
-    queryKey: ['balance-analytics'],
-    queryFn: fetchBalanceAnalytics,
+    queryKey: ['balance-analytics', timeRange, customDays],
+    queryFn: () => fetchBalanceAnalytics(timeRange, customDays),
     refetchInterval: false, // Disable polling
   });
 
@@ -610,44 +616,9 @@ export default function DashboardPage() {
   // Combine API history with debounced live updates (prevents chart re-render on every WS message)
   const combinedHistory = useMemo(() => [...history, ...displayHistory], [history, displayHistory]);
 
-  // Filter data based on time range
-  const filteredHistory = useMemo(() => {
-    // If custom days is set and valid, use that instead
-    const parsedCustomDays = parseInt(customDays, 10);
-    if (customDays && !isNaN(parsedCustomDays) && parsedCustomDays > 0) {
-      const now = new Date();
-      const cutoffTime = new Date();
-      cutoffTime.setDate(now.getDate() - parsedCustomDays);
-      return combinedHistory.filter((item) => new Date(item.timestamp) >= cutoffTime);
-    }
-
-    if (timeRange === 'all') return combinedHistory;
-
-    const now = new Date();
-    const cutoffTime = new Date();
-
-    switch (timeRange) {
-      case '1h':
-        cutoffTime.setHours(now.getHours() - 1);
-        break;
-      case '6h':
-        cutoffTime.setHours(now.getHours() - 6);
-        break;
-      case '24h':
-        cutoffTime.setHours(now.getHours() - 24);
-        break;
-      case '7d':
-        cutoffTime.setDate(now.getDate() - 7);
-        break;
-      case '30d':
-        cutoffTime.setDate(now.getDate() - 30);
-        break;
-      default:
-        return combinedHistory;
-    }
-
-    return combinedHistory.filter((item) => new Date(item.timestamp) >= cutoffTime);
-  }, [combinedHistory, timeRange, customDays]);
+  // Data is already filtered server-side, just use combinedHistory directly
+  // Live updates are still appended client-side
+  const filteredHistory = useMemo(() => combinedHistory, [combinedHistory]);
 
   // Downsample data to reduce chart points
   const downsampleData = useCallback((data: HistoryPoint[], range: TimeRange | string, customDaysValue?: string): HistoryPoint[] => {
@@ -722,11 +693,14 @@ export default function DashboardPage() {
     );
   }, []);
 
-  // Downsample the filtered data
-  const downsampledHistory = useMemo(() =>
-    downsampleData(filteredHistory, timeRange, customDays),
-    [filteredHistory, timeRange, customDays, downsampleData]
-  );
+  // Server already downsamples data, so just use filteredHistory directly
+  // Only apply client-side downsampling if data exceeds 3000 points (shouldn't happen with server-side limit)
+  const downsampledHistory = useMemo(() => {
+    if (filteredHistory.length <= 3000) {
+      return filteredHistory;
+    }
+    return downsampleData(filteredHistory, timeRange, customDays);
+  }, [filteredHistory, timeRange, customDays, downsampleData]);
 
   // Calculate profit analytics for the current time range (use full data for accuracy)
   const profitAnalytics = useMemo(() => calculateProfitAnalytics(filteredHistory, 'total_usd'), [filteredHistory]);
@@ -1049,7 +1023,7 @@ export default function DashboardPage() {
           </div>
 
           <span className="text-xs text-muted-foreground">
-            ({filteredHistory.length} total → {downsampledHistory.length} displayed)
+            ({analytics?.meta?.totalSnapshots?.toLocaleString() || '?'} in DB → {history.length.toLocaleString()} fetched → {downsampledHistory.length.toLocaleString()} displayed)
           </span>
           <div className="ml-auto">
             <button
@@ -1721,21 +1695,29 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex justify-between items-center">
-            <span className="text-sm text-muted-foreground">Total Snapshots:</span>
-            <span className="font-semibold">{combinedHistory.length}</span>
+            <span className="text-sm text-muted-foreground">Total in DB:</span>
+            <span className="font-semibold">{analytics?.meta?.totalSnapshots?.toLocaleString() || 'N/A'}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm text-muted-foreground">Historical Data:</span>
-            <span className="font-semibold">{history.length}</span>
+            <span className="text-sm text-muted-foreground">Fetched from Server:</span>
+            <span className="font-semibold">{history.length.toLocaleString()}</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-sm text-muted-foreground">Live Updates:</span>
             <span className="font-semibold">{liveHistory.length}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm text-muted-foreground">Displayed Data Points:</span>
-            <span className="font-semibold">{filteredHistory.length}</span>
+            <span className="text-sm text-muted-foreground">Displayed Points:</span>
+            <span className="font-semibold">{downsampledHistory.length.toLocaleString()}</span>
           </div>
+          {analytics?.meta?.downsampled && (
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Server Downsampling:</span>
+              <span className="font-semibold text-yellow-600">
+                Every {analytics.meta.samplingInterval}th point
+              </span>
+            </div>
+          )}
           <div className="flex justify-between items-center">
             <span className="text-sm text-muted-foreground">Snapshots with RLB Price:</span>
             <span className="font-semibold">

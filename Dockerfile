@@ -8,7 +8,7 @@ WORKDIR /app
 # Copy only package files first for better caching
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
-RUN npm ci --prefer-offline --no-audit
+RUN npm install --legacy-peer-deps --no-audit
 
 # Builder
 FROM node:20-alpine AS builder
@@ -28,6 +28,7 @@ COPY tailwind.config.ts ./
 COPY postcss.config.js ./
 COPY socket-server.js ./
 COPY server.js ./
+COPY middleware.ts ./
 COPY app ./app
 COPY components ./components
 COPY lib ./lib

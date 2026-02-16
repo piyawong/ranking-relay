@@ -3,14 +3,63 @@ import { prisma } from '@/lib/db/prisma';
 import { decimalToNumber } from '@/lib/utils/format';
 import type { ApiResponse } from '@/lib/types/api';
 
+// Maximum number of data points to return (prevents browser overload)
+const MAX_CHART_POINTS = 2500;
+
+// Calculate cutoff date based on time range
+function getTimeCutoff(timeRange: string, customDays?: number): Date | null {
+    const now = new Date();
+
+    if (customDays && customDays > 0) {
+        const cutoff = new Date(now);
+        cutoff.setDate(cutoff.getDate() - customDays);
+        return cutoff;
+    }
+
+    switch (timeRange) {
+        case '1h':
+            return new Date(now.getTime() - 60 * 60 * 1000);
+        case '6h':
+            return new Date(now.getTime() - 6 * 60 * 60 * 1000);
+        case '24h':
+            return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        case '7d':
+            return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        case '30d':
+            return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        case 'all':
+        default:
+            return null; // No cutoff, fetch all
+    }
+}
+
 // GET /api/balance/analytics - Get balance tracking data (OPTIMIZED)
 export async function GET(request: NextRequest) {
     try {
         const searchParams = request.nextUrl.searchParams;
         const limitParam = searchParams.get('limit');
+        const timeRange = searchParams.get('range') || 'all'; // Default to all
+        const customDays = searchParams.get('days') ? parseInt(searchParams.get('days')!, 10) : undefined;
+
         const limit = limitParam === '0' || !limitParam
             ? undefined
             : Math.min(parseInt(limitParam, 10), 1000000);
+
+        // Calculate time cutoff for the selected range
+        const timeCutoff = getTimeCutoff(timeRange, customDays);
+
+        // Get count for the time range to determine if downsampling is needed
+        const totalCount = timeCutoff
+            ? await prisma.balanceSnapshot.count({
+                where: { timestamp: { gte: timeCutoff } }
+            })
+            : await prisma.balanceSnapshot.count();
+
+        // Calculate the sampling interval for server-side downsampling
+        const needsDownsampling = !limit && totalCount > MAX_CHART_POINTS;
+        const samplingInterval = needsDownsampling
+            ? Math.ceil(totalCount / MAX_CHART_POINTS)
+            : 1;
 
         // Run queries in PARALLEL for speed
         const [latestSnapshot, snapshots] = await Promise.all([
@@ -26,19 +75,55 @@ export async function GET(request: NextRequest) {
                     timestamp: true
                 }
             }),
-            // Get all snapshots - select ONLY needed columns for speed
+            // Get snapshots with time filter and optional downsampling
             limit
-                ? prisma.$queryRaw<any[]>`
-                    SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
-                    FROM "BalanceSnapshot"
-                    ORDER BY timestamp ASC
-                    LIMIT ${limit}
-                `
-                : prisma.$queryRaw<any[]>`
-                    SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
-                    FROM "BalanceSnapshot"
-                    ORDER BY timestamp ASC
-                `
+                ? timeCutoff
+                    ? prisma.$queryRaw<any[]>`
+                        SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
+                        FROM "BalanceSnapshot"
+                        WHERE timestamp >= ${timeCutoff}
+                        ORDER BY timestamp ASC
+                        LIMIT ${limit}
+                    `
+                    : prisma.$queryRaw<any[]>`
+                        SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
+                        FROM "BalanceSnapshot"
+                        ORDER BY timestamp ASC
+                        LIMIT ${limit}
+                    `
+                : needsDownsampling
+                    ? timeCutoff
+                        ? prisma.$queryRaw<any[]>`
+                            SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
+                            FROM (
+                                SELECT *, ROW_NUMBER() OVER (ORDER BY timestamp ASC) as rn
+                                FROM "BalanceSnapshot"
+                                WHERE timestamp >= ${timeCutoff}
+                            ) numbered
+                            WHERE rn % ${samplingInterval} = 1 OR rn = ${totalCount}
+                            ORDER BY timestamp ASC
+                        `
+                        : prisma.$queryRaw<any[]>`
+                            SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
+                            FROM (
+                                SELECT *, ROW_NUMBER() OVER (ORDER BY timestamp ASC) as rn
+                                FROM "BalanceSnapshot"
+                            ) numbered
+                            WHERE rn % ${samplingInterval} = 1 OR rn = ${totalCount}
+                            ORDER BY timestamp ASC
+                        `
+                    : timeCutoff
+                        ? prisma.$queryRaw<any[]>`
+                            SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
+                            FROM "BalanceSnapshot"
+                            WHERE timestamp >= ${timeCutoff}
+                            ORDER BY timestamp ASC
+                        `
+                        : prisma.$queryRaw<any[]>`
+                            SELECT timestamp, onsite_usd, onchain_usdt, onsite_rlb, onchain_rlb, rlb_price_usd
+                            FROM "BalanceSnapshot"
+                            ORDER BY timestamp ASC
+                        `
         ]);
 
         if (!latestSnapshot) {
@@ -146,7 +231,17 @@ export async function GET(request: NextRequest) {
                     total_usd_usdt: totalUSDUSDT,
                     total_rlb: totalRLB
                 },
-                history
+                history,
+                // Metadata for debugging/display
+                meta: {
+                    totalSnapshots: totalCount,
+                    returnedSnapshots: history.length,
+                    downsampled: needsDownsampling,
+                    samplingInterval: needsDownsampling ? samplingInterval : 1,
+                    timeRange,
+                    customDays: customDays || null,
+                    timeCutoff: timeCutoff?.toISOString() || null
+                }
             }
         });
     } catch (error) {

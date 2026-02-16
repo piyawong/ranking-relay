@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db/prisma';
@@ -23,11 +24,11 @@ export async function POST(request: NextRequest) {
     // We want to keep the most complete data (most relays)
     const existingBlock = await prisma.block.findUnique({
       where: { block_number: validated.block_number },
-      include: { relay_details: true }
+      include: { RelayDetail: true }
     });
 
     if (existingBlock) {
-      const existingRelayCount = existingBlock.relay_details.length;
+      const existingRelayCount = existingBlock.RelayDetail.length;
       const newRelayCount = validated.relay_details.length;
 
       // If new data has more relays, update the block with better data
@@ -50,6 +51,7 @@ export async function POST(request: NextRequest) {
 
         await prisma.relayDetail.createMany({
           data: relayDetails.map(rd => ({
+            id: randomUUID(),
             ...rd,
             block_id: existingBlock.id
           }))
@@ -153,7 +155,7 @@ export async function POST(request: NextRequest) {
       message: 'Relay data recorded successfully',
       data: {
         block_id: block.id,
-        rankings: block.relay_details.map(r => ({
+        rankings: block.RelayDetail.map(r => ({
           relay_name: r.relay_name,
           ranking_score: parseFloat(r.ranking_score.toString()),
           arrival_order: r.arrival_order
@@ -224,7 +226,7 @@ export async function GET(request: NextRequest) {
       take: limit,
       orderBy: { block_number: 'desc' },
       include: {
-        relay_details: {
+        RelayDetail: {
           orderBy: { ranking_score: 'asc' }
         }
       }

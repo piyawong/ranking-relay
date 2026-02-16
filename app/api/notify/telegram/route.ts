@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const TELEGRAM_BOT_TOKEN = '8531358829:AAGw6SbUuiIc24a9FhaCwMtzIe5A3YJW88E';
+const TELEGRAM_BOT_TOKEN = '8522381806:AAHqrxrb_3irbG30NaO7K6QX2nq0HCz0HIs';
 const TELEGRAM_CHAT_IDS = [
-  '7371826522',   // piyawatpm (P M)
-  '2139940142',   // oon
+  '-5022175580',   // Group: "bot"
 ];
 const MONITOR_API = 'http://148.251.66.154:3099';
 

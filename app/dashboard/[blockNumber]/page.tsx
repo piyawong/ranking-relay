@@ -1,5 +1,6 @@
 'use client';
 
+import { use } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { RankingTable } from '@/components/dashboard/RankingTable';
@@ -33,10 +34,10 @@ async function fetchRelayHistory(relayName: string) {
 export default function BlockDetailPage({
   params,
 }: {
-  params: { blockNumber: string };
+  params: Promise<{ blockNumber: string }>;
 }) {
   const router = useRouter();
-  const blockNumber = params.blockNumber;
+  const { blockNumber } = use(params);
 
   // Fetch block data
   const {

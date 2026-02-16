@@ -1,5 +1,6 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { Server as HTTPServer } from 'http';
+import { randomUUID } from 'crypto';
 import { BalanceSnapshotSchema } from '@/lib/utils/balance-validation';
 import { prisma } from '@/lib/db/prisma';
 import { decimalToNumber } from '@/lib/utils/format';
@@ -33,6 +34,35 @@ export function initializeSocketIO(httpServer: HTTPServer) {
       socket.emit('pong', { timestamp: new Date().toISOString() });
     });
 
+    // ==========================================
+    // Relay Node Events (from collector service)
+    // ==========================================
+
+    // Handle single relay node update from collector
+    socket.on('relay:update', (data: { data: unknown }) => {
+      console.log('[Socket.IO] Relay update received');
+      // Broadcast to all other clients (frontend)
+      socket.broadcast.emit('relay:update', data);
+    });
+
+    // Handle bulk relay updates from collector
+    socket.on('relay:bulk-update', (data: { data: unknown[]; timestamp: string }) => {
+      console.log(`[Socket.IO] Relay bulk update: ${data.data?.length || 0} nodes`);
+      // Broadcast to all other clients (frontend)
+      socket.broadcast.emit('relay:bulk-update', data);
+    });
+
+    // Handle force refresh request from frontend
+    socket.on('relay:force-refresh', (data?: { nodeId?: string }) => {
+      console.log('[Socket.IO] Force refresh requested', data);
+      // Broadcast to collector service
+      socket.broadcast.emit('relay:force-refresh', data);
+    });
+
+    // ==========================================
+    // Balance Events
+    // ==========================================
+
     // Handle balance snapshot updates from external server
     socket.on('balance:update', async (data) => {
       try {
@@ -57,6 +87,7 @@ export function initializeSocketIO(httpServer: HTTPServer) {
         // Save to database with current price
         const snapshot = await prisma.balanceSnapshot.create({
           data: {
+            id: randomUUID(),
             timestamp,
             pid: validated.pid || null,
             onchain_rlb: validated.onchain.rlb,

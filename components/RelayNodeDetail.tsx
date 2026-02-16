@@ -54,6 +54,7 @@ import {
   Minus,
   GitMerge,
   BarChart3,
+  ExternalLink,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -108,6 +109,8 @@ interface Config {
   target_peers: number;
   max_latency_ms: number;
   network_load: number;
+  heartbeat_interval_ms: number;
+  discovery_interval_ms: number;
 }
 
 // Network load level descriptions
@@ -174,15 +177,10 @@ interface NodeInfo {
   metadata: NodeMetadata;
 }
 
-interface MeshPeer {
-  peer_id: string;
-  client: string;
-}
-
 interface MeshTopic {
   topic: string;
   kind: string;
-  peers: MeshPeer[];
+  peers: { peer_id: string; client: string }[];
 }
 
 interface FirstBlockSender {
@@ -190,10 +188,85 @@ interface FirstBlockSender {
   count: number;
 }
 
+interface MeshPeer {
+  peer_id: string;
+  client: string;
+}
+
+interface MeshTopicData {
+  topic: string;
+  kind?: string;
+  peers: MeshPeer[];
+}
+
+interface PeerData {
+  peer_id: string;
+  address: string;
+  direction: string;
+  state: string;
+  rtt_ms: number;
+  best_rtt_ms: number;
+  rtt_verified: boolean;
+  is_trusted: boolean;
+  score: number;
+  peer_score: number;
+  gossipsub_score: number;
+  gossipsub_score_weighted: number;
+  client: string;
+}
+
+interface ConfigData {
+  target_peers: number;
+  max_latency_ms: number;
+  network_load: number;
+  heartbeat_interval_ms: number;
+  discovery_interval_ms: number;
+}
+
+interface DiscoveryData {
+  unique_peers_discovered: number;
+  routing_table_size: number;
+  cached_enrs: number;
+  total_discovery_queries: number;
+  dht_scan_prefix: number;
+  kademlia_alpha: number;
+  kademlia_k: number;
+  target_peers_per_query: number;
+}
+
+interface TrustedPeerData {
+  peer_id: string;
+  enr?: string;
+  is_connected?: boolean;
+}
+
+/**
+ * Full live data from socket/DB for a relay node.
+ * This contains all data that the collector service fetches and stores.
+ * Uses generic types to be compatible with RelayLiveData from socket hook.
+ */
+interface FullLiveData {
+  nodeId: string;
+  nodeName?: string;
+  meshPeerCount: number;
+  meshPeers: Array<{ topic: string; kind?: string; peers: Array<{ peer_id: string; client?: string; [key: string]: unknown }> }> | null;
+  peerCount: number;
+  peers: Array<{ peer_id: string; [key: string]: unknown }> | null;
+  trustedPeers: Array<string | { peer_id: string; [key: string]: unknown }> | null;
+  config: Record<string, unknown> | null;
+  healthStatus: string | null;
+  discoveryStats: Record<string, unknown> | null;
+  lastError: string | null;
+  isOnline: boolean;
+  updatedAt: string;
+}
+
 interface RelayNodeDetailProps {
   node: RelayNode;
   onClose?: () => void;
   onConfigChange?: () => void;
+  /** Full live data from socket/DB. If provided, component won't poll for this data. */
+  liveData?: FullLiveData | null;
 }
 
 // Helper to build proxy URL
@@ -221,20 +294,36 @@ function parseClientInfo(client: string): { name: string; version: string; full:
   return { name, version, full: client };
 }
 
-export default function RelayNodeDetail({ node, onClose, onConfigChange }: RelayNodeDetailProps) {
+export default function RelayNodeDetail({ node, onClose, onConfigChange, liveData }: RelayNodeDetailProps) {
   const queryClient = useQueryClient();
+
+  // Open popup window for this node
+  const openPopup = () => {
+    const width = 800;
+    const height = 700;
+    const left = (window.screen.width - width) / 2;
+    const top = (window.screen.height - height) / 2;
+    window.open(
+      `/relays/manage/${node.id}`,
+      `manage-${node.id}`,
+      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+    );
+  };
   const [connectEnr, setConnectEnr] = useState('');
   const [connectMultiaddr, setConnectMultiaddr] = useState('');
   const [addTrustedEnr, setAddTrustedEnr] = useState('');
   const [targetPeers, setTargetPeers] = useState('');
   const [maxLatency, setMaxLatency] = useState('');
   const [networkLoad, setNetworkLoad] = useState('');
+  const [heartbeatInterval, setHeartbeatInterval] = useState('');
+  const [discoveryInterval, setDiscoveryInterval] = useState('');
   const [copiedPeerId, setCopiedPeerId] = useState<string | null>(null);
 
   // Peer filter states
   const [peerSearch, setPeerSearch] = useState('');
   const [trustedFilter, setTrustedFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [directionFilter, setDirectionFilter] = useState('all');
 
   // Trusted peer filter states
   const [trustedSearch, setTrustedSearch] = useState('');
@@ -247,6 +336,12 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
 
   // Graft to mesh state
   const [graftPeerId, setGraftPeerId] = useState<string | null>(null);
+
+  // Mesh search state
+  const [meshSearch, setMeshSearch] = useState('');
+
+  // Stats search state
+  const [statsSearch, setStatsSearch] = useState('');
 
   const copyToClipboard = async (peerId: string) => {
     try {
@@ -261,8 +356,16 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const endpoint = node.endpoint || null;
   const port = node.port || 5052;
 
-  // Fetch peers - GET /peers
-  const { data: peersData, isLoading: peersLoading, refetch: refetchPeers } = useQuery({
+  // Use live data from props if available (from socket/DB)
+  // Only poll via HTTP if liveData is not provided (e.g., in popup window)
+  const hasLiveData = !!liveData;
+
+  // Check if node is known to be offline from liveData
+  // If offline, skip all HTTP polling to avoid 502 errors
+  const isKnownOffline = liveData?.isOnline === false;
+
+  // Fetch peers - GET /peers (skip if liveData is available or node is offline)
+  const { data: peersDataPolled, isLoading: peersLoading, refetch: refetchPeers } = useQuery({
     queryKey: ['relay-peers', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
@@ -270,12 +373,12 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       if (!res.ok) throw new Error('Failed to fetch peers');
       return res.json() as Promise<Peer[]>;
     },
-    enabled: !!endpoint,
-    refetchInterval: 10000,
+    enabled: !!endpoint && !hasLiveData && !isKnownOffline,
+    refetchInterval: hasLiveData || isKnownOffline ? false : 10000,
   });
 
-  // Fetch trusted peers - GET /peers/trusted
-  const { data: trustedPeersData, isLoading: trustedLoading, refetch: refetchTrusted } = useQuery({
+  // Fetch trusted peers - GET /peers/trusted (skip if liveData is available or node is offline)
+  const { data: trustedPeersDataPolled, isLoading: trustedLoading, refetch: refetchTrusted } = useQuery({
     queryKey: ['relay-trusted-peers', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
@@ -283,11 +386,11 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       if (!res.ok) throw new Error('Failed to fetch trusted peers');
       return res.json() as Promise<TrustedPeer[]>;
     },
-    enabled: !!endpoint,
+    enabled: !!endpoint && !hasLiveData && !isKnownOffline,
   });
 
-  // Fetch discovery stats - GET /discovery/stats
-  const { data: discoveryData, isLoading: discoveryLoading, refetch: refetchDiscovery } = useQuery({
+  // Fetch discovery stats - GET /discovery/stats (skip if liveData is available or node is offline)
+  const { data: discoveryDataPolled, isLoading: discoveryLoading, refetch: refetchDiscovery } = useQuery({
     queryKey: ['relay-discovery', node.id],
     queryFn: async () => {
       if (!endpoint) return null;
@@ -295,11 +398,12 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       if (!res.ok) throw new Error('Failed to fetch discovery stats');
       return res.json() as Promise<DiscoveryStats>;
     },
-    enabled: !!endpoint,
+    enabled: !!endpoint && !hasLiveData && !isKnownOffline,
   });
 
-  // Fetch current config - GET /config
-  const { data: configData, isLoading: configLoading, refetch: refetchConfig } = useQuery({
+  // Fetch current config - GET /config (ALWAYS fetch directly, don't rely on liveData for config)
+  // This ensures config updates immediately after mutations
+  const { data: configDataPolled, isLoading: configLoading, refetch: refetchConfig } = useQuery({
     queryKey: ['relay-config', node.id],
     queryFn: async () => {
       if (!endpoint) return null;
@@ -307,10 +411,18 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       if (!res.ok) throw new Error('Failed to fetch config');
       return res.json() as Promise<Config>;
     },
-    enabled: !!endpoint,
+    enabled: !!endpoint && !isKnownOffline,
   });
 
-  // Fetch node info - GET /node/info
+  // Use live data if available, otherwise use polled data
+  const peersData = liveData?.peers ?? peersDataPolled ?? [];
+  const trustedPeersData = liveData?.trustedPeers ?? trustedPeersDataPolled ?? [];
+  // Cast config and discovery data to their proper types for safe property access
+  const discoveryData = (liveData?.discoveryStats ?? discoveryDataPolled ?? null) as DiscoveryStats | null;
+  // For config, prefer polled data since it updates immediately after mutations
+  const configData = (configDataPolled ?? liveData?.config ?? null) as Config | null;
+
+  // Fetch node info - GET /node/info (skip if node is known to be offline)
   const { data: nodeInfoData, isLoading: nodeInfoLoading, refetch: refetchNodeInfo } = useQuery({
     queryKey: ['relay-node-info', node.id],
     queryFn: async () => {
@@ -319,10 +431,10 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       if (!res.ok) throw new Error('Failed to fetch node info');
       return res.json() as Promise<NodeInfo>;
     },
-    enabled: !!endpoint,
+    enabled: !!endpoint && !isKnownOffline,
   });
 
-  // Fetch banned peers - GET /peers/banned
+  // Fetch banned peers - GET /peers/banned (skip if node is known to be offline)
   const { data: bannedPeersData, isLoading: bannedLoading, refetch: refetchBanned } = useQuery({
     queryKey: ['relay-banned-peers', node.id],
     queryFn: async () => {
@@ -331,11 +443,11 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       if (!res.ok) throw new Error('Failed to fetch banned peers');
       return res.json() as Promise<BannedPeer[]>;
     },
-    enabled: !!endpoint,
+    enabled: !!endpoint && !isKnownOffline,
   });
 
-  // Health check - GET /eth/v1/node/health (returns 200 for healthy, 206 for syncing)
-  const { data: healthStatus } = useQuery({
+  // Health check - GET /eth/v1/node/health (skip if liveData is available or node is offline)
+  const { data: healthStatusPolled } = useQuery({
     queryKey: ['relay-health', node.id],
     queryFn: async () => {
       if (!endpoint) return null;
@@ -346,23 +458,29 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
         return null; // offline
       }
     },
-    enabled: !!endpoint,
-    refetchInterval: 30000, // Check every 30 seconds
+    enabled: !!endpoint && !hasLiveData && !isKnownOffline,
+    refetchInterval: hasLiveData || isKnownOffline ? false : 30000,
   });
 
-  // Fetch mesh - GET /mesh
-  const { data: meshData, isLoading: meshLoading, refetch: refetchMesh } = useQuery({
+  // Fetch mesh - GET /mesh (skip if liveData is available or node is offline)
+  const { data: meshDataPolled, isLoading: meshLoading, refetch: refetchMesh } = useQuery({
     queryKey: ['relay-mesh', node.id],
     queryFn: async () => {
       if (!endpoint) return [];
       const res = await fetch(buildProxyUrl(endpoint, '/mesh', port));
       if (!res.ok) throw new Error('Failed to fetch mesh');
-      return res.json() as Promise<MeshTopic[]>;
+      return res.json() as Promise<MeshTopicData[]>;
     },
-    enabled: !!endpoint,
+    enabled: !!endpoint && !hasLiveData && !isKnownOffline,
   });
 
-  // Fetch first-block-sender stats - GET /stats/first-block-sender
+  // Use live data for health/mesh if available
+  const healthStatus = liveData?.healthStatus
+    ? (liveData.healthStatus === 'healthy' ? 200 : liveData.healthStatus === 'syncing' ? 206 : null)
+    : healthStatusPolled;
+  const meshData = liveData?.meshPeers ?? meshDataPolled ?? [];
+
+  // Fetch first-block-sender stats - GET /stats/first-block-sender (skip if node is offline)
   const { data: firstBlockSenderData, isLoading: firstBlockSenderLoading, refetch: refetchFirstBlockSender } = useQuery({
     queryKey: ['relay-first-block-sender', node.id],
     queryFn: async () => {
@@ -371,8 +489,8 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       if (!res.ok) throw new Error('Failed to fetch first block sender stats');
       return res.json() as Promise<FirstBlockSender[]>;
     },
-    enabled: !!endpoint,
-    refetchInterval: 30000, // Refresh every 30 seconds
+    enabled: !!endpoint && !isKnownOffline,
+    refetchInterval: isKnownOffline ? false : 30000, // Refresh every 30 seconds if online
   });
 
   // Connect peer mutation - POST /peers
@@ -443,23 +561,40 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
 
   // Update config mutation - PATCH /config
   const updateConfigMutation = useMutation({
-    mutationFn: async (config: { target_peers?: number; max_latency_ms?: number; network_load?: number }) => {
+    mutationFn: async (config: { target_peers?: number; max_latency_ms?: number; network_load?: number; heartbeat_interval_ms?: number; discovery_interval_ms?: number }) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, '/config', port), {
+      console.log('[Config] Sending PATCH to', endpoint, 'with config:', config);
+      const url = buildProxyUrl(endpoint, '/config', port);
+      console.log('[Config] Full URL:', url);
+      const res = await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
       });
-      if (!res.ok) throw new Error('Failed to update config');
-      return res.json();
+      console.log('[Config] Response status:', res.status);
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('[Config] Error response:', errorText);
+        throw new Error(`Failed to update config: ${res.status} - ${errorText}`);
+      }
+      const result = await res.json();
+      console.log('[Config] Success response:', result);
+      return result;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log('[Config] Mutation success, refetching config...');
       refetchConfig();
       setTargetPeers('');
       setMaxLatency('');
       setNetworkLoad('');
+      setHeartbeatInterval('');
+      setDiscoveryInterval('');
       // Notify parent to refresh map coverage
       onConfigChange?.();
+    },
+    onError: (error) => {
+      console.error('[Config] Mutation error:', error);
+      alert(`Failed to update config: ${error.message}`);
     },
   });
 
@@ -499,14 +634,30 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   const addExplicitPeerMutation = useMutation({
     mutationFn: async (peerId: string) => {
       if (!endpoint) throw new Error('No endpoint configured');
-      const res = await fetch(buildProxyUrl(endpoint, `/mesh/explicit/${peerId}`, port), {
+      console.log('[Mesh] Adding explicit peer:', peerId);
+      const url = buildProxyUrl(endpoint, `/mesh/explicit/${peerId}`, port);
+      console.log('[Mesh] URL:', url);
+      const res = await fetch(url, {
         method: 'POST',
       });
-      if (!res.ok) throw new Error('Failed to add explicit peer');
-      return res.json();
+      console.log('[Mesh] Response status:', res.status);
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('[Mesh] Error:', errorText);
+        throw new Error(`Failed to add explicit peer: ${errorText}`);
+      }
+      const data = await res.json();
+      console.log('[Mesh] Success:', data);
+      return data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log('[Mesh] Mutation success, refetching mesh...');
+      alert(`Added peer to explicit: ${data.peer_id}`);
       refetchMesh();
+    },
+    onError: (error) => {
+      console.error('[Mesh] Mutation error:', error);
+      alert(`Failed to add explicit peer: ${error.message}`);
     },
   });
 
@@ -530,14 +681,30 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     mutationFn: async ({ topic, peerId }: { topic: string; peerId: string }) => {
       if (!endpoint) throw new Error('No endpoint configured');
       const encodedTopic = encodeURIComponent(topic);
-      const res = await fetch(buildProxyUrl(endpoint, `/mesh/${encodedTopic}/${peerId}`, port), {
+      console.log('[Mesh] Grafting peer:', peerId, 'to topic:', topic);
+      const url = buildProxyUrl(endpoint, `/mesh/${encodedTopic}/${peerId}`, port);
+      console.log('[Mesh] URL:', url);
+      const res = await fetch(url, {
         method: 'POST',
       });
-      if (!res.ok) throw new Error('Failed to graft peer');
-      return res.json();
+      console.log('[Mesh] Response status:', res.status);
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('[Mesh] Error:', errorText);
+        throw new Error(`Failed to graft peer: ${errorText}`);
+      }
+      const data = await res.json();
+      console.log('[Mesh] Success:', data);
+      return data;
     },
     onSuccess: () => {
+      console.log('[Mesh] Graft success, refetching mesh...');
+      alert('Peer grafted to mesh successfully!');
       refetchMesh();
+    },
+    onError: (error) => {
+      console.error('[Mesh] Graft error:', error);
+      alert(`Failed to graft peer: ${error.message}`);
     },
   });
 
@@ -557,11 +724,93 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
     },
   });
 
-  const peers = peersData || [];
-  const meshTopics = meshData || [];
-  const trustedPeers = trustedPeersData || [];
+  // Normalize peers data to Peer[] format
+  const peers: Peer[] = useMemo(() => {
+    const rawPeers = peersData || [];
+    return rawPeers.map((p) => ({
+      peer_id: p.peer_id ?? '',
+      address: (p as Peer).address ?? '',
+      direction: (p as Peer).direction ?? '',
+      state: (p as Peer).state ?? 'unknown',
+      rtt_ms: (p as Peer).rtt_ms ?? 0,
+      best_rtt_ms: (p as Peer).best_rtt_ms ?? 0,
+      rtt_verified: (p as Peer).rtt_verified ?? false,
+      is_trusted: (p as Peer).is_trusted ?? false,
+      score: (p as Peer).score ?? 0,
+      peer_score: (p as Peer).peer_score ?? 0,
+      gossipsub_score: (p as Peer).gossipsub_score ?? 0,
+      gossipsub_score_weighted: (p as Peer).gossipsub_score_weighted ?? 0,
+      client: (p as Peer).client ?? '',
+    }));
+  }, [peersData]);
+
+  // Normalize mesh topics to MeshTopic[] format
+  const meshTopics: MeshTopic[] = useMemo(() => {
+    const rawMesh = meshData || [];
+    return rawMesh.map((t) => ({
+      topic: t.topic,
+      kind: t.kind ?? 'unknown',
+      peers: (t.peers || []).map((p) => ({
+        peer_id: p.peer_id,
+        client: p.client ?? '',
+      })),
+    }));
+  }, [meshData]);
+
+  // Normalize trusted peers to TrustedPeer[] format
+  // Live data from collector may be strings or objects
+  const trustedPeers: TrustedPeer[] = useMemo(() => {
+    const rawTrusted = trustedPeersData || [];
+    return rawTrusted.map((p) => {
+      if (typeof p === 'string') {
+        return { peer_id: p, enr: '', is_connected: false };
+      }
+      return {
+        peer_id: p.peer_id,
+        enr: (p as TrustedPeer).enr ?? '',
+        is_connected: (p as TrustedPeer).is_connected ?? false,
+      };
+    });
+  }, [trustedPeersData]);
+
   const bannedPeers = bannedPeersData || [];
   const firstBlockSenders = firstBlockSenderData || [];
+
+  // Create a Set of all peer IDs currently in mesh for quick lookup
+  const meshPeerIds = useMemo(() => {
+    const ids = new Set<string>();
+    meshTopics.forEach((topic) => {
+      topic.peers.forEach((peer) => {
+        ids.add(peer.peer_id);
+      });
+    });
+    return ids;
+  }, [meshTopics]);
+
+  // Filter mesh topics based on search
+  const filteredMeshTopics = useMemo(() => {
+    if (!meshSearch) return meshTopics;
+    const query = meshSearch.toLowerCase();
+    return meshTopics.map((topic) => ({
+      ...topic,
+      peers: topic.peers.filter((peer) => {
+        const clientInfo = parseClientInfo(peer.client);
+        return (
+          peer.peer_id.toLowerCase().includes(query) ||
+          clientInfo.name.toLowerCase().includes(query)
+        );
+      }),
+    })).filter((topic) => topic.peers.length > 0);
+  }, [meshTopics, meshSearch]);
+
+  // Filter first block senders based on search
+  const filteredFirstBlockSenders = useMemo(() => {
+    if (!statsSearch) return firstBlockSenders;
+    const query = statsSearch.toLowerCase();
+    return firstBlockSenders.filter((sender) =>
+      sender.peer_id.toLowerCase().includes(query)
+    );
+  }, [firstBlockSenders, statsSearch]);
 
   // Get unique client names for filter dropdown
   const uniqueClients = useMemo(() => {
@@ -601,9 +850,14 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       result = result.filter((peer) => peer.state === statusFilter);
     }
 
+    // Direction filter
+    if (directionFilter !== 'all') {
+      result = result.filter((peer) => peer.direction === directionFilter);
+    }
+
     // Sort by score (highest first)
     return result.sort((a, b) => (b.score || 0) - (a.score || 0));
-  }, [peers, peerSearch, trustedFilter, statusFilter]);
+  }, [peers, peerSearch, trustedFilter, statusFilter, directionFilter]);
 
   // Filter trusted peers
   const filteredTrustedPeers = useMemo(() => {
@@ -643,8 +897,15 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
   }, [bannedPeers, bannedSearch, bannedTypeFilter]);
 
   const connectedPeers = peers.filter(p => p.state === 'connected');
+  const inboundPeers = connectedPeers.filter(p => p.direction === 'inbound');
+  const outboundPeers = connectedPeers.filter(p => p.direction === 'outbound');
   const avgRtt = connectedPeers.length > 0
     ? connectedPeers.reduce((sum, p) => sum + p.rtt_ms, 0) / connectedPeers.length
+    : 0;
+
+  // Calculate inbound percentage for health check
+  const inboundPercent = connectedPeers.length > 0
+    ? Math.round((inboundPeers.length / connectedPeers.length) * 100)
     : 0;
 
   if (!node.endpoint) {
@@ -686,17 +947,47 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
           </div>
           <div className="flex items-center gap-2">
             {node.tag && <Badge variant="secondary" className="text-xs">{node.tag}</Badge>}
-            <Badge
-              variant="outline"
-              className={cn(
-                'text-xs',
-                healthStatus === 200 && 'text-green-600 border-green-200 bg-green-50',
-                healthStatus === 206 && 'text-yellow-600 border-yellow-200 bg-yellow-50',
-                (healthStatus === null || healthStatus === undefined) && 'text-red-600 border-red-200 bg-red-50'
-              )}
+            {/* Status badge - prioritize liveData.isOnline, fallback to healthStatus */}
+            {(() => {
+              // Use live data if available
+              if (liveData) {
+                return (
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      'text-xs',
+                      liveData.isOnline ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50'
+                    )}
+                  >
+                    {liveData.isOnline ? 'online' : 'offline'}
+                  </Badge>
+                );
+              }
+              // Fallback to health check
+              return (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'text-xs',
+                    healthStatus === 200 && 'text-green-600 border-green-200 bg-green-50',
+                    healthStatus === 206 && 'text-yellow-600 border-yellow-200 bg-yellow-50',
+                    (healthStatus === null || healthStatus === undefined) && 'text-red-600 border-red-200 bg-red-50'
+                  )}
+                >
+                  {healthStatus === 200 ? 'active' : healthStatus === 206 ? 'syncing' : 'offline'}
+                </Badge>
+              );
+            })()}
+            {/* Open in popup button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0"
+              onClick={openPopup}
+              title="Open in popup window"
             >
-              {healthStatus === 200 ? 'active' : healthStatus === 206 ? 'syncing' : 'offline'}
-            </Badge>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
         <p className="text-xs text-muted-foreground mt-1 font-mono">
@@ -705,10 +996,38 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
       </div>
 
       {/* Stats Summary */}
-      <div className="grid grid-cols-4 gap-2 px-4 py-3 border-b bg-muted/30 flex-shrink-0">
+      <div className="grid grid-cols-5 gap-2 px-4 py-3 border-b bg-muted/30 flex-shrink-0">
         <div className="text-center">
           <p className="text-xl font-bold">{connectedPeers.length}</p>
           <p className="text-xs text-muted-foreground">Connected</p>
+        </div>
+        <div className="text-center">
+          <TooltipProvider delayDuration={0}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="cursor-help">
+                  <p className={cn(
+                    "text-xl font-bold",
+                    inboundPercent >= 40 ? "text-green-600" : inboundPercent >= 10 ? "text-yellow-600" : "text-red-600"
+                  )}>
+                    {inboundPeers.length}/{outboundPeers.length}
+                  </p>
+                  <p className="text-xs text-muted-foreground">In/Out</p>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                <div className="text-xs space-y-1">
+                  <p><strong>Inbound:</strong> {inboundPeers.length} ({inboundPercent}%)</p>
+                  <p><strong>Outbound:</strong> {outboundPeers.length} ({100 - inboundPercent}%)</p>
+                  <p className="pt-1 border-t mt-1">
+                    {inboundPercent >= 40 ? "✅ Healthy - NAT is open" :
+                     inboundPercent >= 10 ? "⚠️ Low inbound - check NAT/firewall" :
+                     "❌ NAT/Firewall blocking inbound"}
+                  </p>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
         <div className="text-center">
           <p className="text-xl font-bold">{trustedPeers.length}</p>
@@ -832,12 +1151,25 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                 <SelectItem value="connecting">Connecting</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={directionFilter} onValueChange={setDirectionFilter}>
+              <SelectTrigger className="w-[100px] h-8 text-xs">
+                <SelectValue placeholder="Direction" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Direction</SelectItem>
+                <SelectItem value="inbound">Inbound</SelectItem>
+                <SelectItem value="outbound">Outbound</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Peers List */}
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium">
-              Showing {filteredPeers.length} of {peers.length} peers · {connectedPeers.length} connected
+              Showing {filteredPeers.length} of {peers.length} peers ·
+              <span className="text-green-600 ml-1">{inboundPeers.length} in</span>
+              <span className="mx-1">/</span>
+              <span className="text-blue-600">{outboundPeers.length} out</span>
             </span>
             <Button variant="ghost" size="sm" onClick={() => refetchPeers()}>
               <RefreshCw className={cn('h-3 w-3', peersLoading && 'animate-spin')} />
@@ -921,19 +1253,31 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                             </Tooltip>
                           </TooltipProvider>
                         </TableCell>
-                        {/* Status */}
+                        {/* Status + Direction */}
                         <TableCell className="text-xs py-2">
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              'text-[10px] px-1.5 py-0',
-                              peer.state === 'connected' && 'text-green-600 border-green-200 bg-green-50',
-                              peer.state === 'disconnected' && 'text-gray-500 border-gray-200 bg-gray-50',
-                              peer.state === 'connecting' && 'text-yellow-600 border-yellow-200 bg-yellow-50'
-                            )}
-                          >
-                            {peer.state}
-                          </Badge>
+                          <div className="flex items-center gap-1">
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                'text-[10px] px-1.5 py-0',
+                                peer.state === 'connected' && 'text-green-600 border-green-200 bg-green-50',
+                                peer.state === 'disconnected' && 'text-gray-500 border-gray-200 bg-gray-50',
+                                peer.state === 'connecting' && 'text-yellow-600 border-yellow-200 bg-yellow-50'
+                              )}
+                            >
+                              {peer.state}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                'text-[10px] px-1 py-0',
+                                peer.direction === 'inbound' && 'text-green-600 border-green-200 bg-green-50',
+                                peer.direction === 'outbound' && 'text-blue-600 border-blue-200 bg-blue-50'
+                              )}
+                            >
+                              {peer.direction === 'inbound' ? '↓in' : '↑out'}
+                            </Badge>
+                          </div>
                         </TableCell>
                         {/* Score */}
                         <TableCell className="text-xs text-right py-2">
@@ -1199,7 +1543,7 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
 
           {/* Current Config Display */}
           {configData && (
-            <div className="grid grid-cols-3 gap-2 mb-4">
+            <div className="grid grid-cols-5 gap-2 mb-4">
               <Card>
                 <CardContent className="p-3">
                   <p className="text-2xl font-bold">{configData.target_peers}</p>
@@ -1235,6 +1579,18 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                   </TooltipProvider>
                 </CardContent>
               </Card>
+              <Card>
+                <CardContent className="p-3">
+                  <p className="text-2xl font-bold">{configData.heartbeat_interval_ms}</p>
+                  <p className="text-xs text-muted-foreground">Heartbeat (ms)</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-3">
+                  <p className="text-2xl font-bold">{configData.discovery_interval_ms}</p>
+                  <p className="text-xs text-muted-foreground">Discovery (ms)</p>
+                </CardContent>
+              </Card>
             </div>
           )}
 
@@ -1254,7 +1610,23 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                   className="flex-1 h-9"
                 />
                 <Button
-                  onClick={() => updateConfigMutation.mutate({ target_peers: parseInt(targetPeers) })}
+                  onClick={() => {
+                    const parsedValue = parseInt(targetPeers);
+                    console.log('[Config UI] Target Peers button clicked');
+                    console.log('[Config UI] Value:', targetPeers, 'Parsed:', parsedValue, 'isNaN:', isNaN(parsedValue));
+                    console.log('[Config UI] Endpoint:', endpoint, 'Port:', port);
+                    console.log('[Config UI] Mutation pending:', updateConfigMutation.isPending);
+                    if (!endpoint) {
+                      alert('No endpoint configured for this node');
+                      return;
+                    }
+                    if (isNaN(parsedValue)) {
+                      alert('Please enter a valid number');
+                      return;
+                    }
+                    console.log('[Config UI] Calling mutation with target_peers:', parsedValue);
+                    updateConfigMutation.mutate({ target_peers: parsedValue });
+                  }}
                   disabled={!targetPeers || updateConfigMutation.isPending}
                 >
                   {updateConfigMutation.isPending ? 'Setting...' : 'Set'}
@@ -1278,7 +1650,23 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                   className="flex-1 h-9"
                 />
                 <Button
-                  onClick={() => updateConfigMutation.mutate({ max_latency_ms: parseFloat(maxLatency) })}
+                  onClick={() => {
+                    const parsedValue = parseFloat(maxLatency);
+                    console.log('[Config UI] Max Latency button clicked');
+                    console.log('[Config UI] Value:', maxLatency, 'Parsed:', parsedValue, 'isNaN:', isNaN(parsedValue));
+                    console.log('[Config UI] Endpoint:', endpoint, 'Port:', port);
+                    console.log('[Config UI] Mutation pending:', updateConfigMutation.isPending);
+                    if (!endpoint) {
+                      alert('No endpoint configured for this node');
+                      return;
+                    }
+                    if (isNaN(parsedValue)) {
+                      alert('Please enter a valid number');
+                      return;
+                    }
+                    console.log('[Config UI] Calling mutation with max_latency_ms:', parsedValue);
+                    updateConfigMutation.mutate({ max_latency_ms: parsedValue });
+                  }}
                   disabled={!maxLatency || updateConfigMutation.isPending}
                 >
                   {updateConfigMutation.isPending ? 'Setting...' : 'Set'}
@@ -1314,8 +1702,98 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                   </SelectContent>
                 </Select>
                 <Button
-                  onClick={() => updateConfigMutation.mutate({ network_load: parseInt(networkLoad) })}
+                  onClick={() => {
+                    const parsedValue = parseInt(networkLoad);
+                    console.log('[Config UI] Network Load button clicked');
+                    console.log('[Config UI] Value:', networkLoad, 'Parsed:', parsedValue, 'isNaN:', isNaN(parsedValue));
+                    console.log('[Config UI] Endpoint:', endpoint, 'Port:', port);
+                    console.log('[Config UI] Mutation pending:', updateConfigMutation.isPending);
+                    if (!endpoint) {
+                      alert('No endpoint configured for this node');
+                      return;
+                    }
+                    if (isNaN(parsedValue)) {
+                      alert('Please select a valid network load level');
+                      return;
+                    }
+                    console.log('[Config UI] Calling mutation with network_load:', parsedValue);
+                    updateConfigMutation.mutate({ network_load: parsedValue });
+                  }}
                   disabled={!networkLoad || updateConfigMutation.isPending}
+                >
+                  {updateConfigMutation.isPending ? 'Setting...' : 'Set'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Heartbeat Interval */}
+            <div>
+              <label className="text-sm font-medium">Heartbeat Interval (ms)</label>
+              <p className="text-xs text-muted-foreground mb-2">
+                Gossipsub heartbeat interval in milliseconds. Controls mesh maintenance frequency. <span className="text-green-600 font-medium">Takes effect immediately.</span>
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  placeholder={configData ? `Current: ${configData.heartbeat_interval_ms}` : 'e.g., 1000'}
+                  value={heartbeatInterval}
+                  onChange={(e) => setHeartbeatInterval(e.target.value)}
+                  className="flex-1 h-9"
+                />
+                <Button
+                  onClick={() => {
+                    const parsedValue = parseInt(heartbeatInterval);
+                    console.log('[Config UI] Heartbeat Interval button clicked');
+                    console.log('[Config UI] Value:', heartbeatInterval, 'Parsed:', parsedValue, 'isNaN:', isNaN(parsedValue));
+                    if (!endpoint) {
+                      alert('No endpoint configured for this node');
+                      return;
+                    }
+                    if (isNaN(parsedValue) || parsedValue < 100 || parsedValue > 5000) {
+                      alert('Please enter a valid interval (100-5000ms)');
+                      return;
+                    }
+                    console.log('[Config UI] Calling mutation with heartbeat_interval_ms:', parsedValue);
+                    updateConfigMutation.mutate({ heartbeat_interval_ms: parsedValue });
+                  }}
+                  disabled={!heartbeatInterval || updateConfigMutation.isPending}
+                >
+                  {updateConfigMutation.isPending ? 'Setting...' : 'Set'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Discovery Interval */}
+            <div>
+              <label className="text-sm font-medium">Discovery Interval (ms)</label>
+              <p className="text-xs text-muted-foreground mb-2">
+                Peer manager heartbeat interval. Controls discovery and peer pruning frequency. <span className="text-green-600 font-medium">Takes effect immediately.</span>
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  placeholder={configData ? `Current: ${configData.discovery_interval_ms}` : 'e.g., 2000'}
+                  value={discoveryInterval}
+                  onChange={(e) => setDiscoveryInterval(e.target.value)}
+                  className="flex-1 h-9"
+                />
+                <Button
+                  onClick={() => {
+                    const parsedValue = parseInt(discoveryInterval);
+                    console.log('[Config UI] Discovery Interval button clicked');
+                    console.log('[Config UI] Value:', discoveryInterval, 'Parsed:', parsedValue, 'isNaN:', isNaN(parsedValue));
+                    if (!endpoint) {
+                      alert('No endpoint configured for this node');
+                      return;
+                    }
+                    if (isNaN(parsedValue) || parsedValue < 500 || parsedValue > 10000) {
+                      alert('Please enter a valid interval (500-10000ms)');
+                      return;
+                    }
+                    console.log('[Config UI] Calling mutation with discovery_interval_ms:', parsedValue);
+                    updateConfigMutation.mutate({ discovery_interval_ms: parsedValue });
+                  }}
+                  disabled={!discoveryInterval || updateConfigMutation.isPending}
                 >
                   {updateConfigMutation.isPending ? 'Setting...' : 'Set'}
                 </Button>
@@ -1504,20 +1982,40 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
         </TabsContent>
 
         {/* Mesh Tab */}
-        <TabsContent value="mesh" className="flex-1 mt-0 p-4 overflow-y-auto data-[state=inactive]:hidden">
+        <TabsContent value="mesh" className="flex-1 flex flex-col min-h-0 mt-0 p-4 data-[state=inactive]:hidden">
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-medium">Gossipsub Mesh</span>
             <Button variant="ghost" size="sm" onClick={() => refetchMesh()}>
               <RefreshCw className={cn('h-3 w-3', meshLoading && 'animate-spin')} />
             </Button>
           </div>
-          {meshLoading ? (
-            <div className="p-4 text-center text-muted-foreground">Loading...</div>
-          ) : meshTopics.length === 0 ? (
-            <div className="p-4 text-center text-muted-foreground">No mesh data available</div>
-          ) : (
-            <div className="space-y-3">
-              {meshTopics.map((topic) => (
+
+          {/* Mesh Search */}
+          <div className="flex gap-2 mb-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+              <Input
+                placeholder="Search by peer ID, client..."
+                value={meshSearch}
+                onChange={(e) => setMeshSearch(e.target.value)}
+                className="pl-8 h-8 text-xs"
+              />
+            </div>
+            <span className="text-xs text-muted-foreground flex items-center">
+              {meshPeerIds.size} unique peers in mesh
+            </span>
+          </div>
+
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {meshLoading ? (
+              <div className="p-4 text-center text-muted-foreground">Loading...</div>
+            ) : filteredMeshTopics.length === 0 ? (
+              <div className="p-4 text-center text-muted-foreground">
+                {meshTopics.length === 0 ? 'No mesh data available' : 'No peers match your search'}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredMeshTopics.map((topic) => (
                 <Card key={topic.topic}>
                   <CardHeader className="py-2 px-3">
                     <CardTitle className="text-xs font-medium flex items-center justify-between">
@@ -1612,9 +2110,10 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                   )}
                 </Card>
               ))}
-            </div>
-          )}
-          <p className="text-xs text-muted-foreground mt-3">
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-3 flex-shrink-0">
             <strong>Note:</strong> Explicit peers are always included in the mesh regardless of their score.
           </p>
         </TabsContent>
@@ -1764,27 +2263,48 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
               <RefreshCw className={cn('h-3 w-3', firstBlockSenderLoading && 'animate-spin')} />
             </Button>
           </div>
+
+          {/* Stats Search */}
+          <div className="flex gap-2 mb-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 transform -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+              <Input
+                placeholder="Search by peer ID..."
+                value={statsSearch}
+                onChange={(e) => setStatsSearch(e.target.value)}
+                className="pl-8 h-8 text-xs"
+              />
+            </div>
+            <span className="text-xs text-muted-foreground flex items-center gap-2">
+              {filteredFirstBlockSenders.filter(s => meshPeerIds.has(s.peer_id)).length}/{filteredFirstBlockSenders.length} in mesh
+            </span>
+          </div>
+
           <p className="text-xs text-muted-foreground mb-3">
             Peers ranked by how often they send us new blocks first. Higher count means better propagation source.
           </p>
           <div className="flex-1 overflow-y-auto border rounded-md min-h-0">
             {firstBlockSenderLoading ? (
               <div className="p-4 text-center text-muted-foreground">Loading...</div>
-            ) : firstBlockSenders.length === 0 ? (
-              <div className="p-4 text-center text-muted-foreground">No first block sender stats available yet</div>
+            ) : filteredFirstBlockSenders.length === 0 ? (
+              <div className="p-4 text-center text-muted-foreground">
+                {firstBlockSenders.length === 0 ? 'No first block sender stats available yet' : 'No peers match your search'}
+              </div>
             ) : (
               <Table>
                 <TableHeader className="sticky top-0 bg-background z-10">
                   <TableRow>
                     <TableHead className="text-xs w-[50px]">#</TableHead>
                     <TableHead className="text-xs">Peer ID</TableHead>
+                    <TableHead className="text-xs w-[60px]">Mesh</TableHead>
                     <TableHead className="text-xs text-right w-[80px]">Count</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {firstBlockSenders.map((sender, index) => {
+                  {filteredFirstBlockSenders.map((sender, index) => {
                     const totalCount = firstBlockSenders.reduce((sum, s) => sum + s.count, 0);
                     const percentage = totalCount > 0 ? (sender.count / totalCount * 100) : 0;
+                    const isInMesh = meshPeerIds.has(sender.peer_id);
                     return (
                       <TableRow key={sender.peer_id}>
                         <TableCell className="text-xs font-mono py-2">
@@ -1825,6 +2345,17 @@ export default function RelayNodeDetail({ node, onClose, onConfigChange }: Relay
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
+                        </TableCell>
+                        <TableCell className="text-xs py-2">
+                          {isInMesh ? (
+                            <Badge variant="outline" className="text-[10px] text-green-600 border-green-200 bg-green-50">
+                              ✓ In Mesh
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] text-gray-400 border-gray-200 bg-gray-50">
+                              Not in Mesh
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell className="text-xs text-right py-2">
                           <div className="flex flex-col items-end">

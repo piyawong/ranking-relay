@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/db/prisma';
 import { z } from 'zod';
 
@@ -57,8 +58,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const validatedData = createRelayNodeSchema.parse(body);
 
+    const now = new Date();
     const node = await prisma.relayNode.create({
       data: {
+        id: randomUUID(),
         name: validatedData.name,
         tag: validatedData.tag || null,
         description: validatedData.description || null,
@@ -69,6 +72,7 @@ export async function POST(request: NextRequest) {
         status: validatedData.status,
         endpoint: validatedData.endpoint || null,
         port: validatedData.port,
+        updated_at: now,
       },
     });
 

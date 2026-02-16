@@ -214,8 +214,10 @@ function SlotDetailContent() {
   }) || [];
 
   // Create relay name -> node map for filtering duplicates by node.id
+  // Ensure relayNodes is always an array before using forEach
   const relayNameToNode = new Map<string, RelayNode>();
-  relayNodes.forEach(node => {
+  const safeRelayNodes = Array.isArray(relayNodes) ? relayNodes : [];
+  safeRelayNodes.forEach(node => {
     relayNameToNode.set(node.name, node);
   });
 
@@ -234,7 +236,7 @@ function SlotDetailContent() {
   });
 
   // Count matched relays
-  const relayNodeNames = new Set(relayNodes.map(n => n.name));
+  const relayNodeNames = new Set(safeRelayNodes.map(n => n.name));
   const matchedCount = relayDetails.filter(d => relayNodeNames.has(d.relay_name)).length;
   const unmatchedCount = relayDetails.length - matchedCount;
 
@@ -455,7 +457,7 @@ function SlotDetailContent() {
             </div>
           ) : blockData ? (
             <SlotDetailMap
-              relayNodes={relayNodes}
+              relayNodes={safeRelayNodes}
               relayDetails={visibleRelayDetails}
               allRelayDetails={relayDetails}
               selectedRelay={selectedRelay}
@@ -684,7 +686,7 @@ function SlotDetailContent() {
                 <div className="divide-y">
                   {relayDetails.map((relay, index) => {
                     const rank = index + 1;
-                    const node = relayNodes.find(n => n.name === relay.relay_name);
+                    const node = safeRelayNodes.find(n => n.name === relay.relay_name);
                     const isMatched = !!node;
                     const isSelected = selectedRelay === relay.relay_name;
                     const isVisible = isRelayVisible(relay.relay_name);

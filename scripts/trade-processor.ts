@@ -82,11 +82,26 @@ async function processTrade(trade: {
     return { success: false, error: 'No onsite value found' };
   }
 
-  // The on-chain value is the total stablecoins received
-  const onchainValue = txData.totalStableReceived;
+  // Determine direction and select the appropriate onchain value:
+  // - buy_onsite_sell_onchain: We sell RLB on-chain, RECEIVE stablecoins/ETH
+  // - sell_onsite_buy_onchain: We buy RLB on-chain, SEND stablecoins/ETH
+  const direction = trade.direction || 'buy_onsite_sell_onchain';
+
+  // Use totalUsdSent/totalUsdReceived which includes stablecoins + WETH + native ETH
+  const onchainValue = direction === 'sell_onsite_buy_onchain'
+    ? txData.totalUsdSent     // Buying RLB = we spend stablecoins/ETH
+    : txData.totalUsdReceived;  // Selling RLB = we receive stablecoins/ETH
+
+  // Validate onchain value - must be non-zero for a valid trade
+  // If onchain value is 0, the transaction logs may not have been parsed correctly
+  if (onchainValue === 0 || onchainValue < 1) {
+    return {
+      success: false,
+      error: `Invalid onchain value: ${onchainValue}. Transaction may not have any transfers or logs failed to parse. Stable sent: $${txData.totalStableSent.toFixed(2)}, WETH sent: $${txData.wethSentUsd.toFixed(2)}, ETH sent: $${txData.txEthValueUsd.toFixed(2)}`
+    };
+  }
 
   // Calculate profit based on direction
-  const direction = trade.direction || 'buy_onsite_sell_onchain';
   const { rawProfit, profitWithGas } = calculateProfit(
     direction,
     onsiteValue,

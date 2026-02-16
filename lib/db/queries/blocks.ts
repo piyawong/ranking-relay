@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { prisma } from '../prisma';
 import type { BlockWithDetails } from '@/lib/types/database';
 
@@ -10,7 +11,7 @@ export async function getBlockByNumber(
   return prisma.block.findUnique({
     where: { block_number: blockNumber },
     include: {
-      relay_details: {
+      RelayDetail: {
         orderBy: { ranking_score: 'asc' }
       }
     }
@@ -26,7 +27,7 @@ export async function getBlockById(
   return prisma.block.findUnique({
     where: { id },
     include: {
-      relay_details: {
+      RelayDetail: {
         orderBy: { ranking_score: 'asc' }
       }
     }
@@ -46,7 +47,7 @@ export async function getLatestBlocks(
       take: limit,
       orderBy: { block_number: 'desc' },
       include: {
-        relay_details: {
+        RelayDetail: {
           orderBy: { ranking_score: 'asc' }
         }
       }
@@ -97,20 +98,26 @@ export async function createBlock(
     isWinBloxroute = (bloxrouteTime + RELAY_WIN_TOLERANCE_MS) < firstRelayTime;
   }
 
+  const now = new Date();
   return prisma.block.create({
     data: {
+      id: randomUUID(),
       block_number: blockNumber,
       block_hash: blockHash,
       origin: origin,
       bloxroute_timestamp: bloxrouteTimestamp,
       is_win_bloxroute: isWinBloxroute,
       time_difference_ms: timeDifferenceMs,
-      relay_details: {
-        create: relayDetails
+      updated_at: now,
+      RelayDetail: {
+        create: relayDetails.map(rd => ({
+          id: randomUUID(),
+          ...rd
+        }))
       }
     },
     include: {
-      relay_details: true
+      RelayDetail: true
     }
   });
 }

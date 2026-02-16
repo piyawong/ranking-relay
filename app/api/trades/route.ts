@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/db/prisma';
 import { getSlotForExecutionBlock } from '@/lib/utils/fetch-block-data';
 
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest) {
         ]
       },
       include: {
-        relay_details: {
+        RelayDetail: {
           orderBy: { arrival_order: 'asc' },
           take: 1 // Only get the first relay
         }
@@ -215,7 +216,7 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        const firstRelay = block?.relay_details?.[0];
+        const firstRelay = block?.RelayDetail?.[0];
 
         // Calculate bloxroute comparison
         let bloxrouteComparison: { is_win_relay: boolean | null; time_diff_ms: number | null; } = {
@@ -294,11 +295,14 @@ export async function POST(request: NextRequest) {
           }
 
           // Create new trade
+          const now = new Date();
           await prisma.trade.create({
             data: {
+              id: randomUUID(),
               trade_id: tradeData.trade_id || null,
               trade_number: tradeData.trade_number || null,
               timestamp: new Date(tradeData.timestamp),
+              updated_at: now,
               trigger_category: tradeData.trigger_category,
               trigger_type: tradeData.trigger_type,
               block_number: tradeData.block_number,
@@ -354,11 +358,14 @@ export async function POST(request: NextRequest) {
         }, { status: 409 });
       }
 
+      const tradeNow = new Date();
       const trade = await prisma.trade.create({
         data: {
+          id: randomUUID(),
           trade_id: data.trade_id || null,
           trade_number: data.trade_number || null,
           timestamp: new Date(data.timestamp),
+          updated_at: tradeNow,
           trigger_category: data.trigger_category,
           trigger_type: data.trigger_type,
           block_number: data.block_number,

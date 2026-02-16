@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/db/prisma';
 
 // Ethereum mainnet genesis time
@@ -125,16 +126,19 @@ async function getProposerEntity(validatorIndex: number): Promise<ProposerEntity
       : null;
 
     // Upsert to cache
+    const now = new Date();
     await prisma.validatorEntity.upsert({
       where: { validator_index: validatorIndex },
       create: {
+        id: randomUUID(),
         validator_index: validatorIndex,
         entity_name: entityName,
         pool_name: poolName,
         withdrawal_address: validatorData?.withdrawalcredentials || null,
         activation_epoch: activationEpoch,
         exit_epoch: exitEpoch,
-        last_fetched: new Date()
+        last_fetched: now,
+        updated_at: now
       },
       update: {
         entity_name: entityName,
@@ -142,7 +146,8 @@ async function getProposerEntity(validatorIndex: number): Promise<ProposerEntity
         withdrawal_address: validatorData?.withdrawalcredentials || null,
         activation_epoch: activationEpoch,
         exit_epoch: exitEpoch,
-        last_fetched: new Date()
+        last_fetched: now,
+        updated_at: now
       }
     });
 

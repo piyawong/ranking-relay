@@ -1,4 +1,5 @@
 const { createServer } = require('http');
+const { randomUUID } = require('crypto');
 const { Server: SocketIOServer } = require('socket.io');
 const { BalanceSnapshotSchema } = require('./lib/utils/balance-validation');
 const { prisma } = require('./lib/db/prisma');
@@ -50,6 +51,7 @@ io.on('connection', (socket) => {
 
       const snapshot = await prisma.balanceSnapshot.create({
         data: {
+          id: randomUUID(),
           timestamp,
           pid: validated.pid || null,
           onchain_rlb: validated.onchain.rlb,

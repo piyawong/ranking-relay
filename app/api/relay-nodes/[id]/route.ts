@@ -17,11 +17,12 @@ const updateRelayNodeSchema = z.object({
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const node = await prisma.relayNode.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!node) {
@@ -50,14 +51,15 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const body = await request.json();
     const validatedData = updateRelayNodeSchema.parse(body);
 
     const existingNode = await prisma.relayNode.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!existingNode) {
@@ -68,7 +70,7 @@ export async function PUT(
     }
 
     const node = await prisma.relayNode.update({
-      where: { id: params.id },
+      where: { id },
       data: {
         ...(validatedData.name !== undefined && { name: validatedData.name }),
         ...(validatedData.tag !== undefined && { tag: validatedData.tag }),
@@ -108,11 +110,12 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const existingNode = await prisma.relayNode.findUnique({
-      where: { id: params.id },
+      where: { id },
     });
 
     if (!existingNode) {
@@ -123,7 +126,7 @@ export async function DELETE(
     }
 
     await prisma.relayNode.delete({
-      where: { id: params.id },
+      where: { id },
     });
 
     return NextResponse.json({

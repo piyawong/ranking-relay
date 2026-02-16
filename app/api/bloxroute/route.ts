@@ -166,6 +166,9 @@ export async function GET(request: NextRequest) {
         created_at: Date;
         first_relay_name: string;
         first_relay_timestamp: Date;
+        mev_relay: string | null;
+        mev_builder_pubkey: string | null;
+        mev_block_value: string | null;
       }[]>`
         SELECT
           b.block_number,
@@ -175,6 +178,9 @@ export async function GET(request: NextRequest) {
           b.is_win_bloxroute,
           b.time_difference_ms,
           b.created_at,
+          b.mev_relay,
+          b.mev_builder_pubkey,
+          b.mev_block_value,
           first_relay.relay_name as first_relay_name,
           first_relay.arrival_timestamp as first_relay_timestamp
         FROM "Block" b
@@ -212,6 +218,9 @@ export async function GET(request: NextRequest) {
         bloxroute_timestamp: block.bloxroute_timestamp.toISOString(),
         relay_won: relayWon,
         time_difference_ms: relayWon ? -timeDiff : timeDiff,
+        mev_relay: block.mev_relay,
+        mev_builder_pubkey: block.mev_builder_pubkey,
+        mev_block_value: block.mev_block_value,
         created_at: block.created_at.toISOString(),
       };
     });

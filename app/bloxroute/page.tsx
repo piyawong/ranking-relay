@@ -27,7 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { RefreshCw, Award, Zap, TrendingUp, TrendingDown, Filter, RotateCcw, MapPin, BarChart3, Download, Wrench, Calendar, X, Hash, ChevronDown, ChevronRight, Globe, Clock } from 'lucide-react';
+import { RefreshCw, Award, Zap, TrendingUp, TrendingDown, Filter, RotateCcw, MapPin, BarChart3, Download, Wrench, Calendar, X, Hash, ChevronDown, ChevronRight, Globe, Clock, Radio } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { LineChart as RechartsLineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart } from 'recharts';
@@ -310,6 +310,22 @@ async function fetchUniqueRelayNames() {
   return data.data?.relayNames || [];
 }
 
+// Fetch MEV relay data for a single slot
+async function fetchMevRelayData(slot: number) {
+  const response = await fetch(`/api/mev-relay?slot=${slot}`);
+  if (!response.ok) throw new Error('Failed to fetch MEV relay data');
+  const data = await response.json();
+  return data.data;
+}
+
+// Sync MEV relay data for multiple blocks
+async function syncMevRelayData(limit: number = 100, onProgress?: (current: number, total: number) => void) {
+  const response = await fetch(`/api/mev-relay?limit=${limit}`, { method: 'PATCH' });
+  if (!response.ok) throw new Error('Failed to sync MEV relay data');
+  const data = await response.json();
+  return data.data;
+}
+
 export default function BloxroutePage() {
   const [limit, setLimit] = useState(500);
   const [offset, setOffset] = useState(0);
@@ -342,6 +358,10 @@ export default function BloxroutePage() {
   const [originLastBlocks, setOriginLastBlocks] = useState<string>('1000');
   const [originBlockStart, setOriginBlockStart] = useState<string>('');
   const [originBlockEnd, setOriginBlockEnd] = useState<string>('');
+
+  // MEV relay filter state
+  const [mevRelayFilter, setMevRelayFilter] = useState<string>('all');
+  const [mevRelayData, setMevRelayData] = useState<Record<number, any>>({});
 
   // Build filters object
   const filters = useMemo(() => {
@@ -439,6 +459,16 @@ export default function BloxroutePage() {
   const statistics = data?.statistics || null;
   const pagination = data?.pagination || null;
 
+  // Get unique MEV relay names from comparisons
+  const uniqueMevRelays = useMemo(() => {
+    if (!rawComparisons) return [];
+    const relays = new Set<string>();
+    rawComparisons.forEach((c: any) => {
+      if (c.mev_relay) relays.add(c.mev_relay);
+    });
+    return Array.from(relays).sort();
+  }, [rawComparisons]);
+
   // Filter and sort comparisons
   const comparisons = useMemo(() => {
     let filtered = [...rawComparisons];
@@ -448,7 +478,8 @@ export default function BloxroutePage() {
       filtered = filtered.filter((c: any) =>
         c.block_number.toString().includes(searchTerm) ||
         c.first_relay_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        c.bloxroute_origin?.toLowerCase().includes(searchTerm.toLowerCase())
+        c.bloxroute_origin?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.mev_relay?.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
 
@@ -457,6 +488,15 @@ export default function BloxroutePage() {
       filtered = filtered.filter((c: any) => c.relay_won);
     } else if (resultFilter === 'bloxroute') {
       filtered = filtered.filter((c: any) => !c.relay_won);
+    }
+
+    // MEV relay filter
+    if (mevRelayFilter !== 'all') {
+      if (mevRelayFilter === 'none') {
+        filtered = filtered.filter((c: any) => !c.mev_relay);
+      } else {
+        filtered = filtered.filter((c: any) => c.mev_relay === mevRelayFilter);
+      }
     }
 
     // Sort
@@ -473,7 +513,7 @@ export default function BloxroutePage() {
     });
 
     return filtered;
-  }, [rawComparisons, searchTerm, resultFilter, sortBy, sortOrder]);
+  }, [rawComparisons, searchTerm, resultFilter, mevRelayFilter, sortBy, sortOrder]);
 
   // Calculate winrate analysis data for chart
   interface WinrateChartData {
@@ -723,6 +763,42 @@ export default function BloxroutePage() {
     }
   }, [comparisons]);
 
+  // Auto-fetch MEV relay data for blocks without it
+  useEffect(() => {
+    if (comparisons && comparisons.length > 0) {
+      // Find blocks without MEV relay data (limit to first 30 to avoid too many requests)
+      const blocksToFetch = comparisons
+        .slice(0, 30)
+        .filter((c: any) => !c.mev_relay && !mevRelayData[c.block_number])
+        .map((c: any) => c.block_number);
+
+      const fetchMevBatch = async () => {
+        for (const blockNumber of blocksToFetch) {
+          if (!mevRelayData[blockNumber]) {
+            try {
+              const result = await fetchMevRelayData(blockNumber);
+              if (result) {
+                setMevRelayData(prev => ({ ...prev, [blockNumber]: result }));
+              }
+              // Small delay to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (error) {
+              console.error('Error fetching MEV relay data:', error);
+            }
+          }
+        }
+        // Refetch to get updated data from DB
+        if (blocksToFetch.length > 0) {
+          refetch();
+        }
+      };
+
+      if (blocksToFetch.length > 0) {
+        fetchMevBatch();
+      }
+    }
+  }, [comparisons]);
+
   return (
     <div className="container mx-auto px-0 md:px-4 py-8 space-y-6">
       {/* Header Section */}
@@ -756,6 +832,33 @@ export default function BloxroutePage() {
           >
             <Download className={cn('h-4 w-4 mr-2', isSyncing && 'animate-bounce')} />
             Sync All Missing
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                setIsSyncing(true);
+                setShowSyncDialog(true);
+                setSyncTitle('Syncing MEV Relay Data');
+                setSyncProgress({ current: 0, total: 100 });
+                const result = await syncMevRelayData(100);
+                setSyncProgress({ current: result.processed, total: result.processed });
+                alert(`Found ${result.found} blocks with MEV relay data, ${result.not_found} without`);
+                await refetch();
+                setIsSyncing(false);
+                setTimeout(() => setShowSyncDialog(false), 1000);
+              } catch (error) {
+                console.error('Error syncing MEV relay data:', error);
+                alert('Failed to sync MEV relay data');
+                setIsSyncing(false);
+                setShowSyncDialog(false);
+              }
+            }}
+            disabled={isSyncing || isLoading}
+          >
+            <Radio className={cn('h-4 w-4 mr-2', isSyncing && 'animate-pulse')} />
+            Sync MEV Relays
           </Button>
           <Button
             variant="destructive"
@@ -1220,6 +1323,23 @@ export default function BloxroutePage() {
                   icon={Zap}
                 />
               </div>
+
+              {/* MEV Relay Filter */}
+              <Select value={mevRelayFilter} onValueChange={setMevRelayFilter}>
+                <SelectTrigger className="w-[200px]">
+                  <Radio className="h-4 w-4 mr-2" />
+                  <SelectValue placeholder="MEV Relay" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All MEV Relays</SelectItem>
+                  <SelectItem value="none">No MEV Data</SelectItem>
+                  {uniqueMevRelays.map((relay: string) => (
+                    <SelectItem key={relay} value={relay}>
+                      {relay}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Second row of filters */}
@@ -1281,6 +1401,7 @@ export default function BloxroutePage() {
                 Showing {comparisons.length} of {rawComparisons.length} blocks
                 {excludeLocations.length > 0 && ` (${excludeLocations.length} locations excluded)`}
                 {excludeRelays.length > 0 && ` (${excludeRelays.length} relays excluded)`}
+                {mevRelayFilter !== 'all' && ` (MEV: ${mevRelayFilter === 'none' ? 'No data' : mevRelayFilter})`}
               </span>
             </div>
           </div>
@@ -1303,6 +1424,7 @@ export default function BloxroutePage() {
                     <TableHead className="w-28">Block #</TableHead>
                     <TableHead>Our Relay</TableHead>
                     <TableHead>Bloxroute</TableHead>
+                    <TableHead className="hidden md:table-cell">MEV Relay</TableHead>
                     <TableHead className="hidden lg:table-cell">Pandaops First</TableHead>
                     <TableHead className="text-right">Time Diff</TableHead>
                     <TableHead className="text-center">Result</TableHead>
@@ -1364,6 +1486,50 @@ export default function BloxroutePage() {
                               {formatUTCTimestamp(comparison.bloxroute_timestamp)}
                             </div>
                           </div>
+                        </TableCell>
+                        {/* MEV Relay */}
+                        <TableCell className="hidden md:table-cell">
+                          {comparison.mev_relay ? (
+                            <div className="space-y-0.5">
+                              <div className={cn(
+                                "font-medium text-sm px-2 py-0.5 rounded-full inline-block",
+                                comparison.mev_relay.includes('Flashbots') && "bg-orange-100 text-orange-700",
+                                comparison.mev_relay.includes('bloXroute') && "bg-blue-100 text-blue-700",
+                                comparison.mev_relay.includes('Ultra') && "bg-purple-100 text-purple-700",
+                                comparison.mev_relay.includes('Titan') && "bg-green-100 text-green-700",
+                                comparison.mev_relay.includes('Aestus') && "bg-red-100 text-red-700",
+                                !comparison.mev_relay.includes('Flashbots') &&
+                                !comparison.mev_relay.includes('bloXroute') &&
+                                !comparison.mev_relay.includes('Ultra') &&
+                                !comparison.mev_relay.includes('Titan') &&
+                                !comparison.mev_relay.includes('Aestus') && "bg-gray-100 text-gray-700"
+                              )}>
+                                {comparison.mev_relay}
+                              </div>
+                              {comparison.mev_block_value && (
+                                <div className="text-xs text-muted-foreground">
+                                  {(Number(comparison.mev_block_value) / 1e18).toFixed(4)} ETH
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  const result = await fetchMevRelayData(comparison.block_number);
+                                  if (result.mev_relay) {
+                                    await refetch();
+                                  }
+                                } catch (error) {
+                                  console.error('Error fetching MEV relay:', error);
+                                }
+                              }}
+                              className="text-xs text-blue-600 hover:underline"
+                            >
+                              Fetch
+                            </button>
+                          )}
                         </TableCell>
                         {/* Pandaops First - time + place */}
                         <TableCell className="hidden lg:table-cell">
@@ -1438,7 +1604,7 @@ export default function BloxroutePage() {
                       {/* Expanded Row - Propagation Details */}
                       {expandedRows.has(comparison.block_number) && (
                         <TableRow className="bg-slate-50">
-                          <TableCell colSpan={8} className="p-0">
+                          <TableCell colSpan={9} className="p-0">
                             <div className="p-4 space-y-4">
                               {!propagationData[comparison.block_number] ? (
                                 <div className="flex items-center justify-center py-8">

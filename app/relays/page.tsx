@@ -1,15 +1,14 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import RelayNodeDetail from '@/components/RelayNodeDetail';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Users } from 'lucide-react';
+import { Users, Wifi, WifiOff } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -38,8 +37,10 @@ import {
   Plus,
   Pencil,
   Trash2,
+  ExternalLink,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useRelaySocket, RelayLiveData } from '@/lib/hooks/useRelaySocket';
 
 const RelayNodeMap = dynamic(() => import('@/components/RelayNodeMap'), {
   ssr: false,
@@ -98,103 +99,130 @@ const emptyFormData: RelayFormData = {
   port: '5052',
 };
 
-// Component to show mesh peer count for a node
-function MeshPeerCount({ endpoint, port }: { endpoint: string | null; port: number }) {
-  const { data: meshCount } = useQuery({
-    queryKey: ['mesh-count', endpoint, port],
-    queryFn: async () => {
-      if (!endpoint) return null;
-      const res = await fetch(`/api/relay-proxy?endpoint=${encodeURIComponent(endpoint)}&path=/mesh&port=${port}`);
-      if (!res.ok) return null;
-      const data = await res.json();
-      // Sum all peers across all topics
-      const totalPeers = data.reduce((sum: number, topic: { peers: unknown[] }) => sum + (topic.peers?.length || 0), 0);
-      return totalPeers;
-    },
-    enabled: !!endpoint,
-    staleTime: 30000, // Cache for 30 seconds
-    refetchInterval: 60000, // Refresh every 60 seconds
-  });
+// Open node management popup window
+function openNodeManagePopup(node: { id: string; name: string; endpoint: string | null; port: number }) {
+  if (!node.endpoint) {
+    alert('This node has no endpoint configured');
+    return;
+  }
+  const width = 800;
+  const height = 700;
+  const left = (window.screen.width - width) / 2;
+  const top = (window.screen.height - height) / 2;
+  window.open(
+    `/relays/manage/${node.id}`,
+    `manage-${node.id}`,
+    `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+  );
+}
 
-  if (!endpoint || meshCount === null || meshCount === undefined) {
+// Format relative time - show seconds if < 1 minute
+function formatRelativeTime(dateStr: string): string {
+  const now = Date.now();
+  const date = new Date(dateStr).getTime();
+  const diffSec = Math.floor((now - date) / 1000);
+
+  if (diffSec < 60) return `${diffSec} วินาที`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} นาที`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} ชม.`;
+  return `${Math.floor(diffSec / 86400)} วัน`;
+}
+
+// Format short relative time for inline display
+function formatShortTime(dateStr: string): string {
+  const now = Date.now();
+  const date = new Date(dateStr).getTime();
+  const diffSec = Math.floor((now - date) / 1000);
+
+  if (diffSec < 60) return `${diffSec}s`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h`;
+  return `${Math.floor(diffSec / 86400)}d`;
+}
+
+// Component to show mesh peer count for a node (uses live data from socket)
+function MeshPeerCount({ nodeId, liveData }: { nodeId: string; liveData: Map<string, RelayLiveData> }) {
+  const data = liveData.get(nodeId);
+
+  if (!data) {
     return null;
   }
 
+  const relativeTime = data.updatedAt ? formatShortTime(data.updatedAt) : null;
+
   return (
-    <span className="text-xs text-muted-foreground flex items-center gap-1" title="Mesh peers">
+    <span
+      className="text-xs text-muted-foreground flex items-center gap-1"
+      title={data.updatedAt ? `Last update: ${new Date(data.updatedAt).toLocaleString()}` : 'No data'}
+    >
       <Users className="h-3 w-3" />
-      {meshCount}
+      {data.meshPeerCount}
+      {relativeTime && (
+        <span className="text-[10px] text-muted-foreground/70">{relativeTime}</span>
+      )}
     </span>
   );
 }
 
-interface MeshPeer {
-  peer_id: string;
-  [key: string]: unknown;
-}
+// Component to show unique mesh peers across all filtered nodes (uses live data from socket)
+function UniqueMeshSummary({
+  nodeIds,
+  liveData,
+  isConnected,
+  lastUpdate,
+}: {
+  nodeIds: string[];
+  liveData: Map<string, RelayLiveData>;
+  isConnected: boolean;
+  lastUpdate: string | null;
+}) {
+  // Calculate unique peers from live data
+  const { uniqueCount, onlineCount } = useMemo(() => {
+    const allPeerIds = new Set<string>();
+    let online = 0;
 
-interface MeshTopic {
-  topic: string;
-  peers: MeshPeer[];
-}
+    nodeIds.forEach((nodeId) => {
+      const data = liveData.get(nodeId);
+      if (data) {
+        if (data.isOnline) online++;
+        data.meshPeers?.forEach((topic) => {
+          topic.peers?.forEach((peer) => {
+            if (peer.peer_id) {
+              allPeerIds.add(peer.peer_id);
+            }
+          });
+        });
+      }
+    });
 
-// Component to show unique mesh peers across all filtered nodes
-function UniqueMeshSummary({ nodes }: { nodes: Array<{ endpoint: string | null; port: number }> }) {
-  const nodesWithEndpoints = nodes.filter(n => n.endpoint);
+    return { uniqueCount: allPeerIds.size, onlineCount: online };
+  }, [nodeIds, liveData]);
 
-  const { data: uniquePeerData, isLoading } = useQuery({
-    queryKey: ['unique-mesh-peers', nodesWithEndpoints.map(n => `${n.endpoint}:${n.port}`).join(',')],
-    queryFn: async () => {
-      const allPeerIds = new Set<string>();
-
-      await Promise.all(
-        nodesWithEndpoints.map(async (node) => {
-          try {
-            const res = await fetch(`/api/relay-proxy?endpoint=${encodeURIComponent(node.endpoint!)}&path=/mesh&port=${node.port}`);
-            if (!res.ok) return;
-            const data: MeshTopic[] = await res.json();
-            data.forEach((topic) => {
-              topic.peers?.forEach((peer) => {
-                if (peer.peer_id) {
-                  allPeerIds.add(peer.peer_id);
-                }
-              });
-            });
-          } catch {
-            // Ignore errors for individual nodes
-          }
-        })
-      );
-
-      return {
-        uniqueCount: allPeerIds.size,
-        nodeCount: nodesWithEndpoints.length,
-      };
-    },
-    enabled: nodesWithEndpoints.length > 0,
-    staleTime: 30000,
-    refetchInterval: 60000,
-  });
-
-  if (nodesWithEndpoints.length === 0) {
+  if (nodeIds.length === 0) {
     return null;
   }
 
   return (
     <div className="px-4 py-2 bg-muted/50 border-b text-sm">
       <div className="flex items-center justify-between">
-        <span className="text-muted-foreground">
-          {nodesWithEndpoints.length} relay{nodesWithEndpoints.length !== 1 ? 's' : ''} with endpoint
-        </span>
-        <span className="flex items-center gap-1 font-medium">
-          <Users className="h-4 w-4" />
-          {isLoading ? (
-            <span className="text-muted-foreground">loading...</span>
+        <span className="text-muted-foreground flex items-center gap-2">
+          {onlineCount}/{nodeIds.length} online
+          {isConnected ? (
+            <span title="Socket connected"><Wifi className="h-3 w-3 text-green-500" /></span>
           ) : (
-            <span>{uniquePeerData?.uniqueCount || 0} unique mesh peers</span>
+            <span title="Socket disconnected"><WifiOff className="h-3 w-3 text-red-500" /></span>
           )}
         </span>
+        <span className="flex items-center gap-2 font-medium">
+          <Users className="h-4 w-4" />
+          <span>{uniqueCount} unique mesh peers</span>
+        </span>
       </div>
+      {lastUpdate && (
+        <div className="mt-1 text-xs text-muted-foreground text-right">
+          Last update: {new Date(lastUpdate).toLocaleTimeString()} ({formatRelativeTime(lastUpdate)} ago)
+        </div>
+      )}
     </div>
   );
 }
@@ -208,6 +236,9 @@ export default function RelaysPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [configRefreshKey, setConfigRefreshKey] = useState(0);
 
+  // Live data state (from socket)
+  const [liveData, setLiveData] = useState<Map<string, RelayLiveData>>(new Map());
+
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingNode, setEditingNode] = useState<RelayNode | null>(null);
@@ -216,6 +247,52 @@ export default function RelaysPage() {
   // Delete confirmation state
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [nodeToDelete, setNodeToDelete] = useState<RelayNode | null>(null);
+
+  // Socket connection for live relay data
+  const handleSingleUpdate = useCallback((data: RelayLiveData) => {
+    setLiveData((prev) => {
+      const next = new Map(prev);
+      next.set(data.nodeId, data);
+      return next;
+    });
+  }, []);
+
+  const handleBulkUpdate = useCallback((dataList: RelayLiveData[]) => {
+    setLiveData((prev) => {
+      const next = new Map(prev);
+      dataList.forEach((data) => {
+        next.set(data.nodeId, data);
+      });
+      return next;
+    });
+  }, []);
+
+  const { isConnected, lastUpdate, forceRefresh } = useRelaySocket({
+    onUpdate: handleSingleUpdate,
+    onBulkUpdate: handleBulkUpdate,
+  });
+
+  // Fetch initial live data from database
+  useEffect(() => {
+    const fetchInitialLiveData = async () => {
+      try {
+        const res = await fetch('/api/relay-live-data');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.data) {
+            const initialMap = new Map<string, RelayLiveData>();
+            json.data.forEach((item: RelayLiveData) => {
+              initialMap.set(item.nodeId, item);
+            });
+            setLiveData(initialMap);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch initial live data:', error);
+      }
+    };
+    fetchInitialLiveData();
+  }, []);
 
   // Callback to trigger map config refresh when config is updated in RelayNodeDetail
   const handleConfigChange = () => {
@@ -454,11 +531,20 @@ export default function RelaysPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => refetch()}
+              onClick={() => {
+                refetch();
+                forceRefresh();
+              }}
               disabled={isLoading}
+              title={isConnected ? 'Connected - Live updates active' : 'Disconnected - Click to refresh'}
             >
               <RefreshCw className={cn('h-4 w-4 mr-2', isLoading && 'animate-spin')} />
               Refresh
+              {isConnected ? (
+                <Wifi className="h-3 w-3 ml-1 text-green-500" />
+              ) : (
+                <WifiOff className="h-3 w-3 ml-1 text-red-500" />
+              )}
             </Button>
             <Button
               variant="outline"
@@ -512,7 +598,11 @@ export default function RelaysPage() {
                 </div>
                 {/* Node Detail */}
                 <div className="flex-1 overflow-hidden">
-                  <RelayNodeDetail node={selectedNode} onConfigChange={handleConfigChange} />
+                  <RelayNodeDetail
+                    node={selectedNode}
+                    onConfigChange={handleConfigChange}
+                    liveData={liveData.get(selectedNode.id) ?? null}
+                  />
                 </div>
               </div>
             ) : (
@@ -557,7 +647,12 @@ export default function RelaysPage() {
                 </div>
 
                 {/* Unique Mesh Summary */}
-                <UniqueMeshSummary nodes={filteredNodes.map(n => ({ endpoint: n.endpoint, port: n.port || 5052 }))} />
+                <UniqueMeshSummary
+                  nodeIds={filteredNodes.filter(n => n.endpoint).map(n => n.id)}
+                  liveData={liveData}
+                  isConnected={isConnected}
+                  lastUpdate={lastUpdate}
+                />
 
                 {/* Node List */}
                 <div className="flex-1 overflow-y-auto">
@@ -585,7 +680,7 @@ export default function RelaysPage() {
                                 <span className="truncate">
                                   {node.location || node.country || 'No location'}
                                 </span>
-                                <MeshPeerCount endpoint={node.endpoint} port={node.port || 5052} />
+                                <MeshPeerCount nodeId={node.id} liveData={liveData} />
                               </div>
                             </div>
                             <div className="flex items-center gap-2 ml-2">
@@ -594,19 +689,54 @@ export default function RelaysPage() {
                                   {node.tag}
                                 </Badge>
                               )}
-                              <div
-                                className={cn(
-                                  'w-2 h-2 rounded-full',
-                                  node.status === 'active' && 'bg-green-500',
-                                  node.status === 'inactive' && 'bg-red-500',
-                                  node.status === 'maintenance' && 'bg-yellow-500'
-                                )}
-                              />
+                              {/* Status dot: prioritize live isOnline, fallback to DB status */}
+                              {(() => {
+                                const live = liveData.get(node.id);
+                                // If we have live data, use isOnline
+                                if (live) {
+                                  return (
+                                    <div
+                                      className={cn(
+                                        'w-2 h-2 rounded-full',
+                                        live.isOnline ? 'bg-green-500' : 'bg-red-500'
+                                      )}
+                                      title={live.isOnline ? 'Online (connected)' : 'Offline (unreachable)'}
+                                    />
+                                  );
+                                }
+                                // No live data, use DB status
+                                return (
+                                  <div
+                                    className={cn(
+                                      'w-2 h-2 rounded-full',
+                                      node.status === 'active' && 'bg-gray-400',
+                                      node.status === 'inactive' && 'bg-red-500',
+                                      node.status === 'maintenance' && 'bg-yellow-500'
+                                    )}
+                                    title={`Status: ${node.status} (no live data)`}
+                                  />
+                                );
+                              })()}
+                              {node.endpoint && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-blue-600 hover:text-blue-700"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openNodeManagePopup(node);
+                                  }}
+                                  title="Open in popup"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
                                 onClick={(e) => handleOpenEditModal(node, e)}
+                                title="Edit node"
                               >
                                 <Pencil className="h-3 w-3" />
                               </Button>
@@ -615,6 +745,7 @@ export default function RelaysPage() {
                                 size="sm"
                                 className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive"
                                 onClick={(e) => handleOpenDeleteDialog(node, e)}
+                                title="Delete node"
                               >
                                 <Trash2 className="h-3 w-3" />
                               </Button>

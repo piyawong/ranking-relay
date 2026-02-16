@@ -99,11 +99,36 @@ export async function GET(request: NextRequest) {
           continue;
         }
 
-        // The on-chain value is the total stablecoins received
-        const onchainValue = txData.totalStableReceived;
+        // Determine direction and select the appropriate onchain value:
+        // - buy_onsite_sell_onchain: We sell RLB on-chain, RECEIVE stablecoins/ETH
+        // - sell_onsite_buy_onchain: We buy RLB on-chain, SEND stablecoins/ETH
+        const direction = trade.direction || 'buy_onsite_sell_onchain';
+
+        // Use totalUsdSent/totalUsdReceived which includes stablecoins + WETH + native ETH
+        const onchainValue = direction === 'sell_onsite_buy_onchain'
+          ? txData.totalUsdSent     // Buying RLB = we spend stablecoins/ETH
+          : txData.totalUsdReceived;  // Selling RLB = we receive stablecoins/ETH
+
+        // Validate onchain value - must be non-zero for a valid trade
+        // If onchain value is 0, the transaction logs may not have been parsed correctly
+        if (onchainValue === 0 || onchainValue < 1) {
+          results.failed++;
+          const errorDetails = `Stable sent: $${txData.totalStableSent.toFixed(2)}, WETH sent: $${txData.wethSentUsd.toFixed(2)}, ETH sent: $${txData.txEthValueUsd.toFixed(2)}`;
+          results.errors.push(`Trade ${trade.trade_id}: Invalid onchain value: ${onchainValue}. ${errorDetails}`);
+          results.trades.push({
+            trade_id: trade.trade_id || trade.id,
+            status: 'failed',
+            details: {
+              error: 'Invalid onchain value - no transfers detected',
+              stableSent: txData.totalStableSent,
+              wethSentUsd: txData.wethSentUsd,
+              ethSentUsd: txData.txEthValueUsd
+            },
+          });
+          continue;
+        }
 
         // Calculate profit based on direction
-        const direction = trade.direction || 'buy_onsite_sell_onchain';
         const { rawProfit, profitWithGas } = calculateProfit(
           direction,
           onsiteValue,
@@ -127,6 +152,7 @@ export async function GET(request: NextRequest) {
           trade_id: trade.trade_id || trade.id,
           status: 'success',
           details: {
+            direction,
             onsite_value: onsiteValue,
             onchain_value: onchainValue,
             gas_usd: txData.gasUsedUsd,
@@ -134,6 +160,14 @@ export async function GET(request: NextRequest) {
             profit_with_gas: profitWithGas,
             usdt_received: txData.usdtReceived,
             usdc_received: txData.usdcReceived,
+            usdt_sent: txData.usdtSent,
+            usdc_sent: txData.usdcSent,
+            weth_sent: txData.wethSent,
+            weth_sent_usd: txData.wethSentUsd,
+            eth_value: txData.txEthValue,
+            eth_value_usd: txData.txEthValueUsd,
+            total_usd_sent: txData.totalUsdSent,
+            total_usd_received: txData.totalUsdReceived,
             eth_price: txData.ethPriceUsd,
           },
         });

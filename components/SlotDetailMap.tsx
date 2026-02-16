@@ -152,15 +152,20 @@ export default function SlotDetailMap({
     );
   }
 
+  // Ensure arrays are always arrays (guard against undefined/null)
+  const safeRelayDetails = Array.isArray(relayDetails) ? relayDetails : [];
+  const safeRelayNodes = Array.isArray(relayNodes) ? relayNodes : [];
+  const safeAllRelayDetails = Array.isArray(allRelayDetails) ? allRelayDetails : [];
+
   // Create a map of relay name -> relay detail (for ranking info)
   const relayDetailMap = new Map<string, RelayDetail>();
-  relayDetails.forEach(detail => {
+  safeRelayDetails.forEach(detail => {
     relayDetailMap.set(detail.relay_name, detail);
   });
 
   // Create a map of relay name -> relay node (for location info)
   const relayNodeMap = new Map<string, RelayNode>();
-  relayNodes.forEach(node => {
+  safeRelayNodes.forEach(node => {
     relayNodeMap.set(node.name, node);
   });
 
@@ -169,7 +174,7 @@ export default function SlotDetailMap({
   const originalRankMap = new Map<string, number>();
   const seenNodeIdsForRank = new Set<string>();
   let rankCounter = 1;
-  [...allRelayDetails].sort((a, b) => a.arrival_order - b.arrival_order).forEach(detail => {
+  [...safeAllRelayDetails].sort((a, b) => a.arrival_order - b.arrival_order).forEach(detail => {
     const node = relayNodeMap.get(detail.relay_name);
     if (node) {
       if (!seenNodeIdsForRank.has(node.id)) {
@@ -189,7 +194,7 @@ export default function SlotDetailMap({
   const unmatchedNodes: RelayNode[] = [];
 
   // First, find all relay details that have matching nodes
-  relayDetails.forEach(detail => {
+  safeRelayDetails.forEach(detail => {
     const node = relayNodeMap.get(detail.relay_name);
     if (node) {
       matchedRelaysRaw.push({ node, detail });
@@ -197,7 +202,7 @@ export default function SlotDetailMap({
   });
 
   // Find relay nodes that don't have matching relay details
-  relayNodes.forEach(node => {
+  safeRelayNodes.forEach(node => {
     if (!relayDetailMap.has(node.name)) {
       unmatchedNodes.push(node);
     }
@@ -218,8 +223,8 @@ export default function SlotDetailMap({
 
   const defaultCenter: [number, number] = matchedRelays.length > 0
     ? [matchedRelays[0].node.latitude, matchedRelays[0].node.longitude]
-    : relayNodes.length > 0
-    ? [relayNodes[0].latitude, relayNodes[0].longitude]
+    : safeRelayNodes.length > 0
+    ? [safeRelayNodes[0].latitude, safeRelayNodes[0].longitude]
     : WORLD_CENTER;
 
   // All nodes that should be shown (for fit bounds)

@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -19,12 +20,16 @@ async function main() {
 
     // Base timestamp for this block
     const baseTimestamp = new Date(Date.now() - (1010 - blockNum) * 60000); // Each block is ~1 min apart
+    const now = new Date();
 
     const block = await prisma.block.create({
       data: {
+        id: randomUUID(),
         block_number: blockNum,
-        relay_details: {
+        updated_at: now,
+        RelayDetail: {
           create: shuffled.map((name, index) => ({
+            id: randomUUID(),
             relay_name: name,
             latency: parseFloat((10 + Math.random() * 20).toFixed(2)),
             loss: parseFloat((Math.random() * 2).toFixed(2)),
@@ -35,11 +40,11 @@ async function main() {
         }
       },
       include: {
-        relay_details: true
+        RelayDetail: true
       }
     });
 
-    console.log(`Created block ${block.block_number} with ${block.relay_details.length} relays`);
+    console.log(`Created block ${block.block_number} with ${block.RelayDetail.length} relays`);
   }
 
   // Create relay statistics
@@ -54,11 +59,13 @@ async function main() {
 
     await prisma.relayStatistics.create({
       data: {
+        id: randomUUID(),
         relay_name: relayName,
         total_blocks: relayDetails.length,
         avg_latency: parseFloat(avgLatency.toFixed(2)),
         avg_loss: parseFloat(avgLoss.toFixed(2)),
-        first_arrival_count: firstArrivalCount
+        first_arrival_count: firstArrivalCount,
+        last_updated: new Date()
       }
     });
 

@@ -1,0 +1,188 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model BalanceSnapshot {
+  id            String   @id @default(uuid())
+  timestamp     DateTime @default(now())
+  pid           Int?
+  onchain_rlb   Decimal  @db.Decimal(20, 8)
+  onchain_usdt  Decimal  @db.Decimal(20, 8)
+  onsite_rlb    Decimal  @db.Decimal(20, 8)
+  onsite_usd    Decimal  @db.Decimal(20, 8)
+  rlb_price_usd Decimal? @db.Decimal(20, 8) // RLB price in USD at the time of snapshot
+  created_at    DateTime @default(now())
+
+  @@index([created_at])
+  @@index([timestamp])
+}
+
+model Block {
+  id                      String        @id @default(uuid())
+  block_number            Int           @unique  // This is the SLOT number
+  execution_block_number  Int?                   // This is the actual block height
+  block_hash              String?
+  origin                  String?
+  bloxroute_timestamp     DateTime?
+  is_win_bloxroute        Boolean?      // true if bloxroute won, false if relay won, null if no comparison
+  time_difference_ms      Int?          // absolute time difference in milliseconds (always positive)
+  created_at              DateTime      @default(now())
+  updated_at              DateTime      @updatedAt
+  relay_details           RelayDetail[]
+
+  @@index([block_number])
+  @@index([execution_block_number])
+  @@index([block_hash])
+  @@index([is_win_bloxroute])
+  // Composite indexes for bloxroute comparison queries
+  @@index([origin, bloxroute_timestamp, is_win_bloxroute])
+  @@index([block_number(sort: Desc), origin])
+}
+
+model RelayDetail {
+  id                String   @id @default(uuid())
+  block_id          String
+  block             Block    @relation(fields: [block_id], references: [id], onDelete: Cascade)
+  relay_name        String
+  latency           Decimal  @db.Decimal(10, 2)
+  loss              Decimal  @db.Decimal(5, 2)
+  arrival_order     Int
+  arrival_timestamp DateTime
+  ranking_score     Decimal  @db.Decimal(10, 2)
+  created_at        DateTime @default(now())
+
+  @@index([block_id])
+  @@index([relay_name])
+  @@index([ranking_score])
+  @@index([arrival_timestamp])
+  // Composite index for getting first relay efficiently
+  @@index([block_id, arrival_order])
+}
+
+model RelayStatistics {
+  id                  String   @id @default(uuid())
+  relay_name          String   @unique
+  total_blocks        Int      @default(0)
+  avg_latency         Decimal  @db.Decimal(10, 2)
+  avg_loss            Decimal  @db.Decimal(5, 2)
+  first_arrival_count Int      @default(0)
+  last_updated        DateTime @updatedAt
+
+  @@index([relay_name])
+}
+
+model Trade {
+  id                       String    @id @default(uuid())
+  trade_id                 String?   @unique  // External trade ID (timestamp-based)
+  trade_number             Int?      @unique  // Sequential number (legacy support)
+  timestamp                DateTime
+  trigger_category         String    // "onchain" or "onsite"
+  trigger_type             String    // "fast_hook" or "rollbit_price_update"
+  block_number             Int?
+  initial_reserves_rlb     Decimal   @db.Decimal(20, 8)
+  trade_amount_rlb         Decimal   @db.Decimal(20, 8)
+
+  // Direction & Action
+  direction                String?   // "buy_onsite_sell_onchain" or "sell_onsite_buy_onchain"
+  step1_action             String?   // "buy" or "sell" (step 1 is always onsite)
+
+  // Onsite values (step 1)
+  step1_usd_value          Decimal?  @db.Decimal(20, 8) // Initial USD value
+  onsite_value_usd         Decimal?  @db.Decimal(20, 8) // Onsite value in USD
+  onsite_value_with_fee    Decimal?  @db.Decimal(20, 8) // Onsite value with fee applied
+
+  // Onchain values (step 2) - filled by external service
+  tx_hash                  String?   // On-chain transaction hash
+  onchain_usd_value        Decimal?  @db.Decimal(20, 8) // USD value from onchain tx
+  gas_used_usd             Decimal?  @db.Decimal(20, 8) // Gas cost in USD
+
+  // Profit calculations: (sell_side - buy_side) based on direction
+  raw_profit_usd           Decimal?  @db.Decimal(20, 8) // sell_side - buy_side
+  profit_with_gas_usd      Decimal?  @db.Decimal(20, 8) // sell_side - buy_side - gas_used_usd
+
+  api_call_duration_ms     Decimal?  @db.Decimal(10, 2)
+  opponent                 Boolean   @default(false)
+  priority_gwei            Decimal?  @db.Decimal(10, 3)
+  opponent_trades_count    Int?
+  opponent_time_gap_ms     Decimal?  @db.Decimal(10, 2)
+  trade_logs               String[]  @default([])
+  win                      Boolean?
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @updatedAt
+
+  @@index([trade_id])
+  @@index([trade_number])
+  @@index([timestamp])
+  @@index([trigger_category])
+  @@index([trigger_type])
+  @@index([block_number])
+  @@index([opponent])
+  @@index([win])
+  @@index([tx_hash])
+}
+
+model RelayNode {
+  id          String   @id @default(uuid())
+  name        String
+  tag         String?
+  description String?
+  latitude    Decimal  @db.Decimal(10, 7)
+  longitude   Decimal  @db.Decimal(10, 7)
+  location    String?  // City/Region name
+  country     String?
+  status      String   @default("active") // active, inactive, maintenance
+  endpoint    String?
+  port        Int      @default(5052)  // API port, default 5052
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@index([name])
+  @@index([tag])
+  @@index([status])
+  @@index([country])
+}
+
+// Live data from relay nodes (updated by collector service)
+model RelayLiveData {
+  id               String   @id @default(uuid())
+  node_id          String   @unique  // Reference to RelayNode.id
+  mesh_peer_count  Int      @default(0)
+  mesh_peers       Json?    // Full mesh data { topic: string, peers: [...] }[]
+  peer_count       Int      @default(0)
+  peers            Json?    // Peer list data
+  trusted_peers    Json?    // Trusted peers list
+  config           Json?    // Node configuration
+  health_status    String?  // "healthy", "syncing", "error"
+  discovery_stats  Json?    // Discovery statistics
+  last_error       String?  // Last error message if any
+  is_online        Boolean  @default(false)
+  updated_at       DateTime @updatedAt
+  created_at       DateTime @default(now())
+
+  @@index([node_id])
+  @@index([is_online])
+  @@index([updated_at])
+}
+
+// Cache for validator -> entity mapping (Lido, Binance, ether.fi, etc.)
+model ValidatorEntity {
+  id               String   @id @default(uuid())
+  validator_index  Int      @unique  // The proposer/validator index
+  entity_name      String?  // e.g., "Lido", "Binance", "ether.fi", "Coinbase"
+  pool_name        String?  // Specific pool name if available
+  withdrawal_address String?
+  activation_epoch Int?
+  exit_epoch       Int?
+  last_fetched     DateTime @default(now())
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([validator_index])
+  @@index([entity_name])
+}

@@ -8,14 +8,14 @@ export async function getLatestRankings(limit: number = 20): Promise<RelayDetail
   const latestBlock = await prisma.block.findFirst({
     orderBy: { block_number: 'desc' },
     include: {
-      relay_details: {
+      RelayDetail: {
         orderBy: { ranking_score: 'asc' },
         take: limit
       }
     }
   });
 
-  return latestBlock?.relay_details || [];
+  return latestBlock?.RelayDetail || [];
 }
 
 /**
@@ -33,7 +33,7 @@ export async function getRelayHistory(
       take: limit,
       orderBy: { created_at: 'desc' },
       include: {
-        block: true
+        Block: true
       }
     }),
     prisma.relayDetail.count({
@@ -75,13 +75,13 @@ export async function getBlockRelayComparison(
   const block = await prisma.block.findUnique({
     where: { block_number: blockNumber },
     include: {
-      relay_details: {
+      RelayDetail: {
         orderBy: { ranking_score: 'asc' }
       }
     }
   });
 
-  return block?.relay_details || [];
+  return block?.RelayDetail || [];
 }
 
 /**

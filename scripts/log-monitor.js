@@ -4,24 +4,39 @@
  * Background Log Monitor Service
  * Monitors bot logs for specific patterns and sends Telegram notifications
  * Run: node scripts/log-monitor.js
+ * 
+ * Required environment variables:
+ *   TELEGRAM_BOT_TOKEN - Telegram bot token
+ *   TELEGRAM_CHAT_IDS - Comma-separated list of chat IDs
+ *   WS_BASE_URL - WebSocket base URL (e.g., ws://localhost:8765)
+ *   SERVICES_API_URL - Services API URL (e.g., http://localhost:8765/services)
+ *   LOG_MONITOR_PORT - HTTP control port (default: 3099)
  */
 
 const WebSocket = require('ws');
 const fs = require('fs');
 const http = require('http');
 
-// Configuration
+// Validate required environment variables
+if (!process.env.TELEGRAM_BOT_TOKEN) {
+  console.warn('⚠️  WARNING: TELEGRAM_BOT_TOKEN not set - Telegram notifications will not work');
+}
+if (!process.env.TELEGRAM_CHAT_IDS) {
+  console.warn('⚠️  WARNING: TELEGRAM_CHAT_IDS not set - No recipients for notifications');
+}
+if (!process.env.WS_BASE_URL) {
+  console.warn('⚠️  WARNING: WS_BASE_URL not set - Using default localhost:8765');
+}
+
+// Configuration - Use environment variables for sensitive data
 const CONFIG = {
   telegram: {
-    botToken: '8531358829:AAGw6SbUuiIc24a9FhaCwMtzIe5A3YJW88E',
-    chatIds: [
-      '7371826522',   // piyawatpm (P M)
-      '2139940142',   // oon
-    ],
+    botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    chatIds: (process.env.TELEGRAM_CHAT_IDS || '').split(',').filter(Boolean),
   },
   reconnectInterval: 100, // 100ms - immediate reconnect
-  controlPort: 3099, // HTTP control port
-  servicesApiUrl: 'http://185.191.118.179:8765/services',
+  controlPort: parseInt(process.env.LOG_MONITOR_PORT || '3099', 10),
+  servicesApiUrl: process.env.SERVICES_API_URL || 'http://localhost:8765/services',
   statusCheckInterval: 5000, // Check service status every 5 seconds
   // Common patterns for service start/stop detection
   servicePatterns: [
@@ -40,11 +55,11 @@ const CONFIG = {
       type: 'regex',
     },
   ],
-  // Services to monitor for logs
+  // Services to monitor for logs - Uses WS_BASE_URL env var
   services: [
     {
       name: 'bot',
-      wsUrl: 'ws://185.191.118.179:8765/ws/logs/bot',
+      wsUrl: (process.env.WS_BASE_URL || 'ws://localhost:8765') + '/ws/logs/bot',
       patterns: [
         {
           name: 'Warming Connections',
@@ -64,7 +79,7 @@ const CONFIG = {
     },
     {
       name: 'el',
-      wsUrl: 'ws://185.191.118.179:8765/ws/logs/el',
+      wsUrl: (process.env.WS_BASE_URL || 'ws://localhost:8765') + '/ws/logs/el',
       patterns: [
         {
           name: 'EL Not Syncing',
@@ -76,27 +91,27 @@ const CONFIG = {
     },
     {
       name: 'reb',
-      wsUrl: 'ws://185.191.118.179:8765/ws/logs/reb',
+      wsUrl: (process.env.WS_BASE_URL || 'ws://localhost:8765') + '/ws/logs/reb',
       patterns: [],
     },
     {
       name: 'balance-reporter',
-      wsUrl: 'ws://185.191.118.179:8765/ws/logs/balance-reporter',
+      wsUrl: (process.env.WS_BASE_URL || 'ws://localhost:8765') + '/ws/logs/balance-reporter',
       patterns: [],
     },
     {
       name: 'grandine',
-      wsUrl: 'ws://185.191.118.179:8765/ws/logs/grandine',
+      wsUrl: (process.env.WS_BASE_URL || 'ws://localhost:8765') + '/ws/logs/grandine',
       patterns: [],
     },
     {
       name: 'cl-2',
-      wsUrl: 'ws://185.191.118.179:8765/ws/logs/cl-2',
+      wsUrl: (process.env.WS_BASE_URL || 'ws://localhost:8765') + '/ws/logs/cl-2',
       patterns: [],
     },
     {
       name: 'gateway',
-      wsUrl: 'ws://185.191.118.179:8765/ws/logs/gateway',
+      wsUrl: (process.env.WS_BASE_URL || 'ws://localhost:8765') + '/ws/logs/gateway',
       patterns: [
         {
           name: 'RaptorQ Decode Failed',
@@ -451,7 +466,7 @@ async function checkServicesStatus() {
 
       // Check for restart (PID changed while still running)
       if (currentStatus === 'running' && lastStatus === 'running' &&
-          currentPid && lastPid && currentPid !== lastPid) {
+        currentPid && lastPid && currentPid !== lastPid) {
         lastServicePid.set(service.name, currentPid);
 
         if (notificationsEnabled && patternEnabled.get('Service Status Change')) {

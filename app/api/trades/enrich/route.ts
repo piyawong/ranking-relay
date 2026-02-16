@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
     const block = await prisma.block.findFirst({
       where: { block_number: slotInfo.slot },
       include: {
-        relay_details: {
+        RelayDetail: {
           orderBy: { arrival_order: 'asc' },
           take: 1  // Get the fastest relay
         }
@@ -104,7 +104,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Get fastest relay from our data
-    const fastestRelay = block?.relay_details[0];
+    const fastestRelay = block?.RelayDetail[0];
 
     // Build response
     const response: any = {

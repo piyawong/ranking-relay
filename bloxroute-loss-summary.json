@@ -1,0 +1,444 @@
+{
+  "generated_at": "2025-12-02T11:06:21.285Z",
+  "total_losses_analyzed": 500,
+  "mapped_losses": 430,
+  "unmapped_losses": 70,
+  "by_location": [
+    {
+      "location": "Unknown",
+      "country": "Unknown",
+      "latitude": 50.478644,
+      "longitude": 12.335661,
+      "loss_count": 296,
+      "avg_time_diff_ms": 22,
+      "relay_names": [
+        "FAK-HETZ-04-4ms",
+        "FAK-HETZ-01-1ms",
+        "FAK-HETZ-05-10ms",
+        "FAK-HETZ-03-3ms",
+        "SING-HET-01"
+      ]
+    },
+    {
+      "location": "Frankfurt",
+      "country": "Germany",
+      "latitude": 50.139352,
+      "longitude": 8.7395656,
+      "loss_count": 68,
+      "avg_time_diff_ms": 29,
+      "relay_names": [
+        "PROD-01"
+      ]
+    },
+    {
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903,
+      "loss_count": 27,
+      "avg_time_diff_ms": 22,
+      "relay_names": [
+        "ASH-HET-04",
+        "ASH-HET-10",
+        "ASH-HET-02",
+        "ASH-HET-05",
+        "ASH-HET-06",
+        "ASH-HET-03",
+        "ASH-HET-09",
+        "ASH-HET-08"
+      ]
+    },
+    {
+      "location": "Frankfurt am Main",
+      "country": "Germany",
+      "latitude": 50.1109,
+      "longitude": 8.68213,
+      "loss_count": 18,
+      "avg_time_diff_ms": 25,
+      "relay_names": [
+        "FRA-LA7-01"
+      ]
+    },
+    {
+      "location": "Nuremberg",
+      "country": "Germany",
+      "latitude": 49.4527,
+      "longitude": 11.0783,
+      "loss_count": 10,
+      "avg_time_diff_ms": 19,
+      "relay_names": [
+        "NUR-HET-01"
+      ]
+    },
+    {
+      "location": "Tokyo",
+      "country": "Japan",
+      "latitude": 35.6164,
+      "longitude": 139.7425,
+      "loss_count": 9,
+      "avg_time_diff_ms": 10,
+      "relay_names": [
+        "TKY-CTB-01"
+      ]
+    },
+    {
+      "location": "Reston",
+      "country": "United States",
+      "latitude": 38.9586,
+      "longitude": -77.357,
+      "loss_count": 2,
+      "avg_time_diff_ms": 33,
+      "relay_names": [
+        "ASH-ZAP-01"
+      ]
+    }
+  ],
+  "by_origin": [
+    {
+      "origin": "NA: United States",
+      "loss_count": 463,
+      "avg_time_diff_ms": 24,
+      "locations_lost_to": [
+        "FAK-HETZ-02-2ms",
+        "FAK-HETZ-04-4ms",
+        "Frankfurt",
+        "FAK-HETZ-01-1ms",
+        "Frankfurt am Main",
+        "FAK-HETZ-05-10ms",
+        "Nuremberg",
+        "FAK-HETZ-03-3ms",
+        "Ashburn",
+        "Reston"
+      ]
+    },
+    {
+      "origin": "AS: Japan",
+      "loss_count": 21,
+      "avg_time_diff_ms": 16,
+      "locations_lost_to": [
+        "Tokyo",
+        "FAK-HETZ-02-2ms",
+        "SING-HET-01",
+        "FAK-HETZ-03-3ms",
+        "FAK-HETZ-01-1ms",
+        "FAK-HETZ-05-10ms",
+        "Ashburn"
+      ]
+    },
+    {
+      "origin": "EU: Germany",
+      "loss_count": 7,
+      "avg_time_diff_ms": 13,
+      "locations_lost_to": [
+        "Frankfurt am Main",
+        "Frankfurt",
+        "FAK-HETZ-02-2ms",
+        "FAK-HETZ-05-10ms"
+      ]
+    },
+    {
+      "origin": "NA: Virginia",
+      "loss_count": 4,
+      "avg_time_diff_ms": 33,
+      "locations_lost_to": [
+        "FAK-HETZ-02-2ms",
+        "Frankfurt",
+        "FAK-HETZ-04-4ms"
+      ]
+    },
+    {
+      "origin": "EU: Ireland",
+      "loss_count": 3,
+      "avg_time_diff_ms": 20,
+      "locations_lost_to": [
+        "FAK-HETZ-03-3ms",
+        "FAK-HETZ-04-4ms",
+        "Frankfurt"
+      ]
+    },
+    {
+      "origin": "EU: France",
+      "loss_count": 1,
+      "avg_time_diff_ms": 17,
+      "locations_lost_to": [
+        "Frankfurt am Main"
+      ]
+    },
+    {
+      "origin": "AS: Singapore",
+      "loss_count": 1,
+      "avg_time_diff_ms": 6,
+      "locations_lost_to": [
+        "FAK-HETZ-01-1ms"
+      ]
+    }
+  ],
+  "existing_relay_nodes": [
+    {
+      "name": "BHS-OVH-01",
+      "location": "Montreal",
+      "country": "Canada",
+      "latitude": 45.4995,
+      "longitude": -73.5848
+    },
+    {
+      "name": "NYC-CTB-01",
+      "location": "Orangeburg",
+      "country": "United States",
+      "latitude": 41.0446,
+      "longitude": -73.9592
+    },
+    {
+      "name": "NYC-CTB-02",
+      "location": "Orangeburg",
+      "country": "United States",
+      "latitude": 41.0446,
+      "longitude": -74.9592
+    },
+    {
+      "name": "NJS-INS-01",
+      "location": "Secaucus",
+      "country": "United States",
+      "latitude": 40.7862,
+      "longitude": -74.0743
+    },
+    {
+      "name": "ASH-ZAP-01",
+      "location": "Reston",
+      "country": "United States",
+      "latitude": 38.9586,
+      "longitude": -77.357
+    },
+    {
+      "name": "SLU-CTB-01",
+      "location": "St Louis",
+      "country": "United States",
+      "latitude": 38.6364,
+      "longitude": -90.1985
+    },
+    {
+      "name": "USE-CTB-01",
+      "location": "Seattle",
+      "country": "United States",
+      "latitude": 47.3066,
+      "longitude": -122.2619
+    },
+    {
+      "name": "HIL-HET-01",
+      "location": "Hillsboro",
+      "country": "United States",
+      "latitude": 45.526,
+      "longitude": -122.9874
+    },
+    {
+      "name": "UK1-CTB-01",
+      "location": "Portsmouth",
+      "country": "United Kingdom",
+      "latitude": 50.8514,
+      "longitude": -0.9903
+    },
+    {
+      "name": "GRA-OVH-01",
+      "location": "Roubaix",
+      "country": "France",
+      "latitude": 50.6924,
+      "longitude": 3.20113
+    },
+    {
+      "name": "SBG-OVH-01",
+      "location": "Roubaix",
+      "country": "France",
+      "latitude": 50.6924,
+      "longitude": 3.20113
+    },
+    {
+      "name": "NUR-HET-01",
+      "location": "Nuremberg",
+      "country": "Germany",
+      "latitude": 49.4527,
+      "longitude": 11.0783
+    },
+    {
+      "name": "HEL-HET-01",
+      "location": "Helsinki",
+      "country": "Finland",
+      "latitude": 60.1719,
+      "longitude": 24.9347
+    },
+    {
+      "name": "MAD-OVH-01",
+      "location": "Madrid",
+      "country": "Spain",
+      "latitude": 40.4273,
+      "longitude": -3.71344
+    },
+    {
+      "name": "FRA-LA7-01",
+      "location": "Frankfurt am Main",
+      "country": "Germany",
+      "latitude": 50.1109,
+      "longitude": 8.68213
+    },
+    {
+      "name": "IND-CTB-01",
+      "location": "Mumbai",
+      "country": "India",
+      "latitude": 19.0748,
+      "longitude": 72.8856
+    },
+    {
+      "name": "TKY-CTB-01",
+      "location": "Tokyo",
+      "country": "Japan",
+      "latitude": 35.6164,
+      "longitude": 139.7425
+    },
+    {
+      "name": "SIN-CTB-01",
+      "location": "Singapore",
+      "country": "Singapore",
+      "latitude": 1.35208,
+      "longitude": 103.82
+    },
+    {
+      "name": "SYD-CTB-01",
+      "location": "Sydney",
+      "country": "Australia",
+      "latitude": -33.897069,
+      "longitude": 151.198284
+    },
+    {
+      "name": "ASH-HET-04",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "FAK-HETZ-04-4ms",
+      "location": null,
+      "country": null,
+      "latitude": 50.478644,
+      "longitude": 12.335661
+    },
+    {
+      "name": "FAK-HETZ-01-1ms",
+      "location": null,
+      "country": null,
+      "latitude": 50.478644,
+      "longitude": 12.335661
+    },
+    {
+      "name": "FAK-HETZ-03-3ms",
+      "location": null,
+      "country": null,
+      "latitude": 50.478644,
+      "longitude": 12.335661
+    },
+    {
+      "name": "FAK-HETZ-05-10ms",
+      "location": null,
+      "country": null,
+      "latitude": 50.478644,
+      "longitude": 12.335661
+    },
+    {
+      "name": "SING-HET-01",
+      "location": null,
+      "country": null,
+      "latitude": 1.3449077,
+      "longitude": 103.8073394
+    },
+    {
+      "name": "ASH-HET-10",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-09",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-08",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-07",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-06",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-05",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-03",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-02",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "ASH-HET-01",
+      "location": "Ashburn",
+      "country": "United States",
+      "latitude": 39.0469,
+      "longitude": -77.4903
+    },
+    {
+      "name": "PROD-01",
+      "location": "Frankfurt",
+      "country": "Germany",
+      "latitude": 50.139352,
+      "longitude": 8.7395656
+    },
+    {
+      "name": "NTH-CHERRY-01,",
+      "location": null,
+      "country": null,
+      "latitude": 52.3548019,
+      "longitude": 4.9616063
+    },
+    {
+      "name": "CHICACO-CHERRY-01",
+      "location": null,
+      "country": null,
+      "latitude": 41.8629202,
+      "longitude": -87.6410596
+    },
+    {
+      "name": "TKY-CTB-02",
+      "location": "0",
+      "country": "0",
+      "latitude": 35.6898836,
+      "longitude": 139.7566473
+    }
+  ]
+}

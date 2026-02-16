@@ -41,5 +41,21 @@ services:
       timeout: 5s
       retries: 5
 
+  relay-collector:
+    build:
+      context: ./services/relay-collector
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://relay_user:relay_pass@postgres:5432/relay_db
+      SOCKET_URL: http://webapp:3001
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      webapp:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:

@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
         take: query.limit,
         orderBy: { ranking_score: 'asc' },
         include: {
-          block: {
+          Block: {
             select: {
               block_number: true,
               created_at: true
@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
       loss: decimalToNumber(ranking.loss),
       arrival_order: ranking.arrival_order,
       ranking_score: decimalToNumber(ranking.ranking_score),
-      block_number: ranking.block.block_number,
+      block_number: ranking.Block.block_number,
       created_at: ranking.created_at.toISOString()
     }));
 

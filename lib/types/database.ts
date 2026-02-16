@@ -5,7 +5,7 @@ export type { Block, RelayDetail, RelayStatistics };
 
 // Extended types with relations
 export interface BlockWithDetails extends Block {
-  relay_details: RelayDetail[];
+  RelayDetail: RelayDetail[];
 }
 
 // Type for relay metrics used in calculations

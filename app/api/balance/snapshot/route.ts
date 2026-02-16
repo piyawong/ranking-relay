@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import { BalanceSnapshotSchema } from '@/lib/utils/balance-validation';
 import { prisma } from '@/lib/db/prisma';
 import { decimalToNumber } from '@/lib/utils/format';
@@ -24,6 +25,7 @@ export async function POST(request: NextRequest) {
         // Create balance snapshot with current price
         const snapshot = await prisma.balanceSnapshot.create({
             data: {
+                id: randomUUID(),
                 timestamp,
                 pid: validated.pid || null,
                 onchain_rlb: validated.onchain.rlb,

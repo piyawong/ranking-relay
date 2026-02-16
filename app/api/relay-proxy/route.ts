@@ -43,6 +43,25 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Block private IP ranges to prevent SSRF
+  if (ipRegex.test(endpoint)) {
+    const parts = endpoint.split('.').map(Number);
+    // Block 127.0.0.0/8 (localhost), 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+    if (
+      parts[0] === 127 ||
+      parts[0] === 10 ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      parts[0] === 0 ||
+      parts[0] === 169 && parts[1] === 254
+    ) {
+      return NextResponse.json(
+        { error: 'Access to private IP ranges is not allowed' },
+        { status: 403 }
+      );
+    }
+  }
+
   // Ensure path starts with /
   const apiPath = path.startsWith('/') ? path : `/${path}`;
   const url = `http://${endpoint}:${port}${apiPath}`;
@@ -279,6 +298,8 @@ export async function PATCH(request: NextRequest) {
   const portParam = searchParams.get('port');
   const port = portParam ? parseInt(portParam, 10) : DEFAULT_API_PORT;
 
+  console.log('[relay-proxy PATCH] endpoint:', endpoint, 'path:', path, 'port:', port);
+
   if (!endpoint) {
     return NextResponse.json(
       { error: 'Missing endpoint parameter' },
@@ -312,7 +333,10 @@ export async function PATCH(request: NextRequest) {
     if (contentType?.includes('application/json')) {
       const jsonBody = await request.json();
       body = JSON.stringify(jsonBody);
+      console.log('[relay-proxy PATCH] body:', body);
     }
+
+    console.log('[relay-proxy PATCH] Forwarding to:', url);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -329,8 +353,11 @@ export async function PATCH(request: NextRequest) {
 
     clearTimeout(timeoutId);
 
+    console.log('[relay-proxy PATCH] Response status:', response.status);
+
     if (!response.ok) {
       const errorText = await response.text();
+      console.error('[relay-proxy PATCH] Error:', errorText);
       return NextResponse.json(
         { error: `Relay API error: ${response.status}`, details: errorText },
         { status: response.status }
@@ -338,8 +365,10 @@ export async function PATCH(request: NextRequest) {
     }
 
     const data = await response.json();
+    console.log('[relay-proxy PATCH] Success response:', data);
     return NextResponse.json(data);
   } catch (error) {
+    console.error('[relay-proxy PATCH] Exception:', error);
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
         return NextResponse.json(
